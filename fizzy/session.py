@@ -9,19 +9,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
 from typing import Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from fizzy import prompts
 from fizzy.ai.base import Message, Provider, ProviderError, Request
+from fizzy.context.gather import Context, gather
+from fizzy.context.tracker import ForegroundTracker
 from fizzy.runtime import AsyncRunner
 from fizzy.settings import Settings
 
 log = logging.getLogger(__name__)
 
-HISTORY_TURNS = 8   # question/answer pairs remembered
+HISTORY_TURNS = 8   # question/answer pairs remembered per app
 
 
 class Session(QObject):
@@ -31,15 +32,19 @@ class Session(QObject):
     answer_done = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self, settings: Settings, runner: AsyncRunner, provider: Provider):
+    def __init__(self, settings: Settings, runner: AsyncRunner, provider: Provider,
+                 tracker: ForegroundTracker):
         super().__init__()
         self.settings = settings
         self.runner = runner
         self.provider = provider
+        self.tracker = tracker
         self.state = "idle"
         self._task: Optional[asyncio.Task] = None
-        self._history: list[Message] = []
+        # Separate history per app, so a chat about Excel doesn't leak into VS Code.
+        self._history: dict[str, list[Message]] = {}
         self.last_answer = ""
+        self.last_context: Optional[Context] = None
 
     # ── called from the Qt thread ───────────────────────────────────────
 
@@ -77,14 +82,18 @@ class Session(QObject):
     async def _turn(self, question: str) -> None:
         self._set_state("thinking")
         self.answer_started.emit(question)
+        win = self.tracker.current()
+        ctx = await gather(self.settings, win, want_screen=self.provider.vision)
+        self.last_context = ctx
         req = Request(
-            system=prompts.system_prompt(self._context_lines()),
+            system=prompts.system_prompt(ctx.lines),
             text=question,
-            history=list(self._history),
+            history=list(self._history.get(win.app_key, [])),
+            images=ctx.images,
             model=self.settings.model_for(self.provider.id),
         )
         answer = await self._stream(req)
-        self._remember(question, answer)
+        self._remember(win.app_key, question, answer)
         self.answer_done.emit(answer)
 
     async def _stream(self, req: Request) -> str:
@@ -105,13 +114,14 @@ class Session(QObject):
             raise ProviderError(f"{self.provider.label} sent back an empty answer. Try again or pick another model.")
         return answer
 
-    def _context_lines(self) -> list[str]:
-        return [f"Today is {datetime.now():%A, %d %B %Y}, local time {datetime.now():%H:%M}."]
-
-    def _remember(self, question: str, answer: str) -> None:
+    def _remember(self, app_key: str, question: str, answer: str) -> None:
         self.last_answer = answer
-        self._history += [Message("user", question), Message("assistant", answer)]
-        self._history = self._history[-HISTORY_TURNS * 2:]
+        h = self._history.setdefault(app_key, [])
+        h += [Message("user", question), Message("assistant", answer)]
+        del h[:-HISTORY_TURNS * 2]
+
+    def forget(self) -> None:
+        self._history.clear()
 
     def _set_state(self, state: str) -> None:
         if state != self.state:

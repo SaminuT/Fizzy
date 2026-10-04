@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 )
 
 from fizzy import APP_NAME
-from fizzy.ui import theme
+from fizzy.ui import theme, win32
 from fizzy.ui.theme import css
 
 STATE_TEXT = {
@@ -209,6 +209,10 @@ class Panel(QWidget):
             self.stop_requested.emit()
         else:
             self._submit()
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        win32.exclude_from_capture(self)
 
     def paintEvent(self, _event) -> None:
         p = QPainter(self)

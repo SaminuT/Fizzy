@@ -9,6 +9,8 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from fizzy import APP_NAME, __version__, logs, single_instance
 from fizzy.ai.anthropic_provider import AnthropicProvider
+from fizzy.context.screen import ScreenLayout
+from fizzy.context.tracker import ForegroundTracker
 from fizzy.runtime import AsyncRunner
 from fizzy.session import Session
 from fizzy.settings import Settings
@@ -24,8 +26,9 @@ class FizzyApp:
         self.qt = qt
         self.settings = Settings.load()
         self.runner = AsyncRunner()
+        self.tracker = ForegroundTracker()
         provider = AnthropicProvider()
-        self.session = Session(self.settings, self.runner, provider)
+        self.session = Session(self.settings, self.runner, provider, self.tracker)
 
         self.panel = Panel()
         self.panel.set_provider(provider.label)
@@ -53,6 +56,12 @@ class FizzyApp:
             self.settings.save()
 
     def start(self) -> None:
+        ScreenLayout.refresh()
+        self.qt.screenAdded.connect(lambda _s: ScreenLayout.refresh())
+        self.qt.screenRemoved.connect(lambda _s: ScreenLayout.refresh())
+        for s in self.qt.screens():
+            s.geometryChanged.connect(lambda _g: ScreenLayout.refresh())
+        self.tracker.start()
         self.tray.show()
         self.panel.show_near_corner()
         log.info("ready (provider=%s)", self.session.provider.id)
