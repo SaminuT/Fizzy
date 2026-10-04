@@ -4,3 +4,6 @@ keyring>=25
 anthropic>=0.40
 mss>=9
 Pillow>=10
+uiautomation>=2.0
+pywin32>=306
+keyboard>=0.13

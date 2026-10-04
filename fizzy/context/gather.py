@@ -6,12 +6,13 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Optional
 
 from fizzy.ai.base import Image
 from fizzy.context import privacy, screen
 from fizzy.context.screen import ScreenLayout, Shot
 from fizzy.context.window import WindowInfo
-from fizzy.settings import Settings
+from fizzy.settings import CONTEXT_SCREEN, CONTEXT_SELECTION_OR_SCREEN, Settings
 
 log = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ class Context:
     window: WindowInfo
     shots: list[Shot] = field(default_factory=list)
     lines: list[str] = field(default_factory=list)
+    selection: Optional[str] = None
     sensitive: bool = False
 
     @property
@@ -28,7 +30,19 @@ class Context:
         return [s.image for s in self.shots]
 
 
-async def gather(settings: Settings, win: WindowInfo, want_screen: bool = True) -> Context:
+async def gather(
+    settings: Settings,
+    win: WindowInfo,
+    *,
+    vision: bool = True,
+    selection: Optional[str] = None,
+    pointing: bool = False,
+) -> Context:
+    """Decide what to send, following the Screen context setting.
+
+    A pointing question always gets a screenshot when the model can see,
+    because there's nothing to point at without one.
+    """
     ctx = Context(window=win)
     now = datetime.now()
     ctx.lines.append(f"Today is {now:%A, %d %B %Y}; the local time is {now:%H:%M}.")
@@ -42,10 +56,28 @@ async def gather(settings: Settings, win: WindowInfo, want_screen: bool = True) 
             "was taken. Answer from the question alone and mention briefly that you skipped looking.")
         return ctx
 
+    mode = settings.screen_context
+    if mode != CONTEXT_SCREEN and selection:
+        ctx.selection = selection
+        ctx.lines.append("The user highlighted some text in that window; it comes with their question.")
+
+    want_screen = vision and (
+        mode == CONTEXT_SCREEN
+        or pointing
+        or (mode == CONTEXT_SELECTION_OR_SCREEN and not ctx.selection)
+    )
     if want_screen:
         ctx.shots = await _screenshots(settings)
         ctx.lines += describe_shots(ctx.shots)
+    elif not ctx.selection:
+        ctx.lines.append("No screenshot was taken for this question.")
     return ctx
+
+
+def compose_question(question: str, selection: Optional[str]) -> str:
+    if not selection:
+        return question
+    return f'{question}\n\nHighlighted text:\n"""\n{selection}\n"""'
 
 
 async def _screenshots(settings: Settings) -> list[Shot]:

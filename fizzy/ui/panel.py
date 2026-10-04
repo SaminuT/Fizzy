@@ -89,6 +89,25 @@ class Panel(QWidget):
         self.extra_rows.setSpacing(6)
         root.addLayout(self.extra_rows)
 
+        # "Using the highlighted text" chip, shown while a selection is on offer.
+        self.chip = QWidget()
+        chip = QHBoxLayout(self.chip)
+        chip.setContentsMargins(10, 4, 4, 4)
+        self.chip_label = QLabel("")
+        self.chip_label.setStyleSheet(f"color:{css(theme.TEXT)}; font-size:11px;")
+        chip.addWidget(self.chip_label, stretch=1)
+        drop = QPushButton("✕")
+        drop.setFixedSize(20, 20)
+        drop.setToolTip("Don't send the highlighted text")
+        drop.setStyleSheet(self._flat_button_css())
+        drop.clicked.connect(self._drop_selection)
+        chip.addWidget(drop)
+        self.chip.setStyleSheet(f"background:{css(theme.SURFACE)}; border-radius:9px;")
+        self.chip.hide()
+        self.extra_rows.addWidget(self.chip)
+        self._selection = ""
+        self._selection_dropped = False
+
         ask = QHBoxLayout()
         ask.setSpacing(6)
         self.input = QLineEdit()
@@ -155,6 +174,27 @@ class Panel(QWidget):
         busy = state in ("thinking", "speaking")
         self.send.setText("■" if busy else "➤")
         self.send.setToolTip("Stop" if busy else "Send")
+
+    def set_selection(self, text: str) -> None:
+        """Offer (or withdraw) the highlighted text from the user's app."""
+        if text != self._selection:
+            self._selection_dropped = False
+        self._selection = text
+        if text and not self._selection_dropped:
+            preview = " ".join(text.split())
+            if len(preview) > 70:
+                preview = preview[:70] + "…"
+            self.chip_label.setText(f"Using highlighted text: “{preview}”")
+            self.chip.show()
+        else:
+            self.chip.hide()
+
+    def selection_to_send(self) -> str:
+        return "" if self._selection_dropped else self._selection
+
+    def _drop_selection(self) -> None:
+        self._selection_dropped = True
+        self.chip.hide()
 
     def set_status_note(self, text: str) -> None:
         self.status.setText(text)

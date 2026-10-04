@@ -5,20 +5,30 @@ from __future__ import annotations
 import logging
 import sys
 
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtGui import QAction, QActionGroup
+from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox
 
 from fizzy import APP_NAME, __version__, logs, single_instance
 from fizzy.ai.anthropic_provider import AnthropicProvider
 from fizzy.context.screen import ScreenLayout
+from fizzy.context.selection_watch import SelectionWatcher
 from fizzy.context.tracker import ForegroundTracker
 from fizzy.runtime import AsyncRunner
 from fizzy.session import Session
-from fizzy.settings import Settings
+from fizzy.settings import (
+    CONTEXT_MODES, CONTEXT_SCREEN, CONTEXT_SELECTION_ONLY, CONTEXT_SELECTION_OR_SCREEN, Settings,
+)
 from fizzy.ui.panel import Panel
 from fizzy.ui.theme import app_icon
 from fizzy.ui.tray import Tray
 
 log = logging.getLogger("fizzy")
+
+CONTEXT_LABELS = {
+    CONTEXT_SCREEN: "Screenshot",
+    CONTEXT_SELECTION_OR_SCREEN: "Highlighted text, else screenshot",
+    CONTEXT_SELECTION_ONLY: "Highlighted text only",
+}
 
 
 class FizzyApp:
@@ -27,6 +37,7 @@ class FizzyApp:
         self.settings = Settings.load()
         self.runner = AsyncRunner()
         self.tracker = ForegroundTracker()
+        self.selection = SelectionWatcher()
         provider = AnthropicProvider()
         self.session = Session(self.settings, self.runner, provider, self.tracker)
 
@@ -35,11 +46,13 @@ class FizzyApp:
         self.panel.set_models([(provider.default_model, provider.default_model)],
                               self.settings.model_for(provider.id) or provider.default_model)
         self.tray = Tray()
+        self.tray.set_builder(self._build_menu)
         self._connect()
 
     def _connect(self) -> None:
         s, p = self.session, self.panel
-        p.question_submitted.connect(s.ask_text)
+        p.question_submitted.connect(lambda q: s.ask_text(q, p.selection_to_send() or None))
+        self.selection.changed.connect(p.set_selection)
         p.stop_requested.connect(s.cancel)
         p.model_chosen.connect(self._on_model_chosen)
         s.state_changed.connect(p.set_state)
@@ -49,6 +62,39 @@ class FizzyApp:
         s.error.connect(p.show_error)
         self.tray.show_panel.connect(p.focus_input)
         self.tray.quit_requested.connect(self.quit)
+
+    # ── tray menu ───────────────────────────────────────────────────────
+
+    def _build_menu(self, menu: QMenu) -> None:
+        ctx = menu.addMenu("Screen context")
+        group = QActionGroup(ctx)
+        for mode in CONTEXT_MODES:
+            a = QAction(CONTEXT_LABELS[mode], ctx, checkable=True, checked=self.settings.screen_context == mode)
+            a.triggered.connect(lambda _c, m=mode: self._set_context_mode(m))
+            group.addAction(a)
+            ctx.addAction(a)
+        ctx.addSeparator()
+        self._toggle(ctx, "Capture all monitors", "all_monitors")
+        self._toggle(ctx, "Copy-to-read fallback (uses the clipboard)", "clipboard_fallback")
+        self._toggle(menu, "Privacy guard", "privacy_guard")
+
+    def _toggle(self, menu: QMenu, label: str, field: str, after=None) -> QAction:
+        a = QAction(label, menu, checkable=True, checked=bool(getattr(self.settings, field)))
+
+        def flip(checked: bool) -> None:
+            setattr(self.settings, field, checked)
+            self.settings.save()
+            if after:
+                after(checked)
+
+        a.toggled.connect(flip)
+        menu.addAction(a)
+        return a
+
+    def _set_context_mode(self, mode: str) -> None:
+        self.settings.screen_context = mode
+        self.settings.save()
+        self.selection.set_enabled(mode != CONTEXT_SCREEN)
 
     def _on_model_chosen(self, model: str) -> None:
         if model:
@@ -62,6 +108,7 @@ class FizzyApp:
         for s in self.qt.screens():
             s.geometryChanged.connect(lambda _g: ScreenLayout.refresh())
         self.tracker.start()
+        self.selection.start(self.settings.screen_context != CONTEXT_SCREEN)
         self.tray.show()
         self.panel.show_near_corner()
         log.info("ready (provider=%s)", self.session.provider.id)
@@ -69,6 +116,7 @@ class FizzyApp:
     def quit(self) -> None:
         log.info("quitting")
         self.session.cancel()
+        self.selection.stop()
         try:
             self.runner.run(self.session.provider.aclose(), timeout=3)
         except Exception:

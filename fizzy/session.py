@@ -13,9 +13,9 @@ from typing import Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from fizzy import prompts
+from fizzy import intent, prompts
 from fizzy.ai.base import Message, Provider, ProviderError, Request
-from fizzy.context.gather import Context, gather
+from fizzy.context.gather import Context, compose_question, gather
 from fizzy.context.tracker import ForegroundTracker
 from fizzy.runtime import AsyncRunner
 from fizzy.settings import Settings
@@ -48,8 +48,10 @@ class Session(QObject):
 
     # ── called from the Qt thread ───────────────────────────────────────
 
-    def ask_text(self, text: str) -> None:
-        self.runner.submit(self._start(self._turn(text)), on_error=self._report)
+    def ask_text(self, text: str, selection: Optional[str] = None) -> None:
+        """A typed question. selection is the highlighted text to include, if any."""
+        win = self.tracker.current()
+        self.runner.submit(self._start(self._turn(text, win, selection)), on_error=self._report)
 
     def cancel(self) -> None:
         self.runner.loop.call_soon_threadsafe(self._cancel_now)
@@ -79,15 +81,15 @@ class Session(QObject):
         if self._task and not self._task.done():
             self._task.cancel()
 
-    async def _turn(self, question: str) -> None:
+    async def _turn(self, question: str, win, selection: Optional[str]) -> None:
         self._set_state("thinking")
         self.answer_started.emit(question)
-        win = self.tracker.current()
-        ctx = await gather(self.settings, win, want_screen=self.provider.vision)
+        ctx = await gather(self.settings, win, vision=self.provider.vision, selection=selection,
+                           pointing=intent.wants_pointing(question))
         self.last_context = ctx
         req = Request(
             system=prompts.system_prompt(ctx.lines),
-            text=question,
+            text=compose_question(question, ctx.selection),
             history=list(self._history.get(win.app_key, [])),
             images=ctx.images,
             model=self.settings.model_for(self.provider.id),
