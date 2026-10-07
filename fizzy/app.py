@@ -13,8 +13,10 @@ from fizzy.ai.anthropic_provider import AnthropicProvider
 from fizzy.context.screen import ScreenLayout
 from fizzy.context.selection_watch import SelectionWatcher
 from fizzy.context.tracker import ForegroundTracker
+from fizzy.hotkey import Hotkey
 from fizzy.runtime import AsyncRunner
 from fizzy.session import Session
+from fizzy.speech.mic import Microphone
 from fizzy.settings import (
     CONTEXT_MODES, CONTEXT_SCREEN, CONTEXT_SELECTION_ONLY, CONTEXT_SELECTION_OR_SCREEN, Settings,
 )
@@ -39,7 +41,9 @@ class FizzyApp:
         self.tracker = ForegroundTracker()
         self.selection = SelectionWatcher()
         provider = AnthropicProvider()
-        self.session = Session(self.settings, self.runner, provider, self.tracker)
+        self.mic = Microphone(self.settings.mic_device)
+        self.session = Session(self.settings, self.runner, provider, self.tracker, self.mic)
+        self.hotkey = Hotkey(self.settings.hotkey)
 
         self.panel = Panel()
         self.panel.set_provider(provider.label)
@@ -60,6 +64,11 @@ class FizzyApp:
         s.answer_chunk.connect(p.append_answer)
         s.answer_done.connect(p.set_answer)
         s.error.connect(p.show_error)
+        s.notice.connect(p.set_status_note)
+        s.level.connect(p.meter.set_level)
+        self.hotkey.pressed.connect(s.start_listening)
+        self.hotkey.released.connect(s.stop_listening)
+        self.hotkey.escape.connect(lambda: s.cancel() if s.state != "idle" else None)
         self.tray.show_panel.connect(p.focus_input)
         self.tray.quit_requested.connect(self.quit)
 
@@ -109,6 +118,12 @@ class FizzyApp:
             s.geometryChanged.connect(lambda _g: ScreenLayout.refresh())
         self.tracker.start()
         self.selection.start(self.settings.screen_context != CONTEXT_SCREEN)
+        try:
+            self.hotkey.start()
+        except Exception:
+            log.exception("couldn't register the hotkey")
+            self.tray.notify(APP_NAME, f"Couldn't register the hotkey {self.settings.hotkey}. "
+                                       "Typing in the panel still works.")
         self.tray.show()
         self.panel.show_near_corner()
         log.info("ready (provider=%s)", self.session.provider.id)
@@ -117,6 +132,8 @@ class FizzyApp:
         log.info("quitting")
         self.session.cancel()
         self.selection.stop()
+        self.hotkey.stop()
+        self.mic.close()
         try:
             self.runner.run(self.session.provider.aclose(), timeout=3)
         except Exception:

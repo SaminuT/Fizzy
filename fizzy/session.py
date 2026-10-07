@@ -1,28 +1,37 @@
 """One conversation turn at a time: question in, answer out.
 
-The Qt side calls ask_text() / cancel(). Everything slow runs on the
-background asyncio loop, and results come back through Qt signals, which
-are safe to emit from any thread.
+The Qt side calls ask_text(), start_listening() / stop_listening() and
+cancel(). Everything slow runs on the background asyncio loop, and results
+come back through Qt signals, which are safe to emit from any thread.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+import time
 from typing import Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from fizzy import intent, prompts
 from fizzy.ai.base import Message, Provider, ProviderError, Request
+from fizzy.context import privacy, selection
 from fizzy.context.gather import Context, compose_question, gather
 from fizzy.context.tracker import ForegroundTracker
+from fizzy.context.window import WindowInfo
 from fizzy.runtime import AsyncRunner
-from fizzy.settings import Settings
+from fizzy.settings import CONTEXT_SCREEN, Settings
+from fizzy.speech import stt
+from fizzy.speech.endpoint import Endpointer
+from fizzy.speech.mic import BYTES_PER_SECOND, FRAME, RATE, Microphone
 
 log = logging.getLogger(__name__)
 
 HISTORY_TURNS = 8   # question/answer pairs remembered per app
+MIN_AUDIO_S = 0.3
+STT_TIMEOUT_S = 120
 
 
 class Session(QObject):
@@ -31,14 +40,24 @@ class Session(QObject):
     answer_chunk = pyqtSignal(str)
     answer_done = pyqtSignal(str)
     error = pyqtSignal(str)
+    notice = pyqtSignal(str)                # short status note, e.g. "Didn't catch that"
+    level = pyqtSignal(float)               # mic level while listening
+    heard = pyqtSignal(str)                 # what speech-to-text made of it
 
     def __init__(self, settings: Settings, runner: AsyncRunner, provider: Provider,
-                 tracker: ForegroundTracker):
+                 tracker: ForegroundTracker, mic: Microphone):
         super().__init__()
         self.settings = settings
         self.runner = runner
         self.provider = provider
         self.tracker = tracker
+        self.mic = mic
+        self.mic.on_level = self._on_mic_level
+        self._transcriber: Optional[stt.Transcriber] = None
+        self._endpointer: Optional[Endpointer] = None
+        self._ep_lock = threading.Lock()
+        self._utterance_over = threading.Event()
+        self._pressed_at = 0.0
         self.state = "idle"
         self._task: Optional[asyncio.Task] = None
         # Separate history per app, so a chat about Excel doesn't leak into VS Code.
@@ -48,13 +67,34 @@ class Session(QObject):
 
     # ── called from the Qt thread ───────────────────────────────────────
 
-    def ask_text(self, text: str, selection: Optional[str] = None) -> None:
-        """A typed question. selection is the highlighted text to include, if any."""
+    def ask_text(self, text: str, highlighted: Optional[str] = None) -> None:
+        """A typed question, with the highlighted text to include, if any."""
         win = self.tracker.current()
-        self.runner.submit(self._start(self._turn(text, win, selection)), on_error=self._report)
+        self.runner.submit(self._start(self._turn(text, win, highlighted)), on_error=self._report)
+
+    def start_listening(self) -> None:
+        """Hotkey down (or wake word): start recording a spoken question."""
+        if self.state == "listening":
+            return
+        self._pressed_at = time.monotonic()
+        win = self.tracker.current()
+        self.runner.submit(self._start(self._voice_turn(win)), on_error=self._report)
+
+    def stop_listening(self) -> None:
+        """Hotkey up. A quick tap keeps listening until the user goes quiet;
+        a hold ends the recording on release."""
+        if time.monotonic() - self._pressed_at >= self.settings.hold_threshold_s:
+            self._utterance_over.set()
 
     def cancel(self) -> None:
+        self._utterance_over.set()
         self.runner.loop.call_soon_threadsafe(self._cancel_now)
+
+    def reset_transcriber(self) -> None:
+        """Pick the speech-to-text service again (keys or settings changed)."""
+        old, self._transcriber = self._transcriber, None
+        if old is not None:
+            self.runner.submit(old.aclose())
 
     def set_provider(self, provider: Provider) -> None:
         old = self.provider
@@ -81,10 +121,76 @@ class Session(QObject):
         if self._task and not self._task.done():
             self._task.cancel()
 
-    async def _turn(self, question: str, win, selection: Optional[str]) -> None:
+    async def _voice_turn(self, win: WindowInfo) -> None:
+        sel_mode = self.settings.screen_context != CONTEXT_SCREEN
+        sensitive = self.settings.privacy_guard and privacy.is_sensitive(win)
+        # Read the selection now, while the user's app still has focus.
+        uia = asyncio.create_task(asyncio.to_thread(selection.read_uia)) if sel_mode and not sensitive else None
+
+        pcm = await self._record()
+        if len(pcm) < MIN_AUDIO_S * BYTES_PER_SECOND:
+            if uia:
+                uia.cancel()
+            return
+
+        self._set_state("thinking")
+        if self._transcriber is None:
+            self._transcriber = stt.choose(self.settings)
+        try:
+            text = await asyncio.wait_for(self._transcriber.transcribe(pcm), STT_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            raise ProviderError("Speech-to-text took too long. Try again, or pick a smaller Whisper model.")
+        log.info("heard: %r (%.1fs of audio)", text[:120], len(pcm) / BYTES_PER_SECOND)
+        if not text:
+            self.notice.emit("Didn't catch that. Try again?")
+            return
+        self.heard.emit(text)
+        if intent.is_stop(text):
+            return
+
+        picked = selection.clean(await uia) if uia else None
+        if picked is None and sel_mode and not sensitive and self.settings.clipboard_fallback                 and selection.clipboard_allowed(win):
+            # The hotkey is released by now, so Ctrl+C reaches the app intact.
+            picked = selection.clean(await asyncio.to_thread(selection.read_via_clipboard))
+        await self._turn(text, win, picked)
+
+    async def _record(self) -> bytes:
+        if not self.mic.is_open:
+            try:
+                self.mic.open()
+            except Exception as e:
+                raise ProviderError(f"Couldn't open the microphone: {e}") from e
+        self._utterance_over.clear()
+        with self._ep_lock:
+            self._endpointer = Endpointer()
+        self.mic.start_recording()
+        self._set_state("listening")
+        try:
+            while not self._utterance_over.is_set():
+                await asyncio.sleep(0.03)
+        finally:
+            with self._ep_lock:
+                self._endpointer = None
+            pcm = self.mic.stop_recording()
+            if not self.settings.wake_word:
+                # Don't keep the mic (and Windows' mic-in-use light) on between questions.
+                self.mic.close()
+        return pcm
+
+    def _on_mic_level(self, rms: float) -> None:
+        # Runs on the audio thread for every 30 ms frame.
+        with self._ep_lock:
+            ep = self._endpointer
+            if ep is not None and ep.feed(rms, FRAME / RATE):
+                log.info("end of speech (%s)", ep.reason)
+                self._utterance_over.set()
+        if ep is not None:
+            self.level.emit(rms)
+
+    async def _turn(self, question: str, win: WindowInfo, highlighted: Optional[str]) -> None:
         self._set_state("thinking")
         self.answer_started.emit(question)
-        ctx = await gather(self.settings, win, vision=self.provider.vision, selection=selection,
+        ctx = await gather(self.settings, win, vision=self.provider.vision, selection=highlighted,
                            pointing=intent.wants_pointing(question))
         self.last_context = ctx
         req = Request(

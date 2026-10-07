@@ -20,6 +20,42 @@ STATE_TEXT = {
 }
 
 
+class LevelMeter(QWidget):
+    """Five little bars that bounce with the mic level."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(46, 14)
+        self._level = 0.0
+        self._decay = QTimer(self, interval=50)
+        self._decay.timeout.connect(self._fade)
+
+    def set_level(self, rms: float) -> None:
+        self._level = max(self._level, min(1.0, rms * 12))
+        if not self._decay.isActive():
+            self._decay.start()
+        self.update()
+
+    def _fade(self) -> None:
+        self._level *= 0.8
+        if self._level < 0.02:
+            self._level = 0.0
+            self._decay.stop()
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(theme.CORAL)
+        shape = (0.5, 0.8, 1.0, 0.8, 0.5)
+        w = 6
+        for i, k in enumerate(shape):
+            h = max(2.0, self.height() * self._level * k)
+            x = i * (w + 4)
+            p.drawRoundedRect(QRectF(x, (self.height() - h) / 2, w, h), 2, 2)
+
+
 class Panel(QWidget):
     question_submitted = pyqtSignal(str)
     model_chosen = pyqtSignal(str)
@@ -74,6 +110,9 @@ class Panel(QWidget):
         self.status.setStyleSheet(f"color:{css(theme.TEXT_DIM)}; font-size:12px;")
         status.addWidget(self.dot)
         status.addWidget(self.status)
+        self.meter = LevelMeter()
+        self.meter.hide()
+        status.addWidget(self.meter)
         status.addStretch()
         self.status_row = status
         root.addLayout(status)
@@ -111,7 +150,7 @@ class Panel(QWidget):
         ask = QHBoxLayout()
         ask.setSpacing(6)
         self.input = QLineEdit()
-        self.input.setPlaceholderText("Type a question and press Enter")
+        self.input.setPlaceholderText("Type a question, or hold the hotkey and talk")
         self.input.setStyleSheet(
             f"QLineEdit {{ background:{css(theme.SURFACE)}; color:{css(theme.TEXT)};"
             f" border:1px solid {css(theme.BORDER)}; border-radius:10px; padding:7px 10px; font-size:13px; }}"
@@ -171,6 +210,7 @@ class Panel(QWidget):
         colour = theme.STATE_COLOURS.get(state, theme.VIOLET)
         self.dot.setStyleSheet(f"color:{css(colour)}; font-size:10px;")
         self.status.setText(STATE_TEXT.get(state, state))
+        self.meter.setVisible(state == "listening")
         busy = state in ("thinking", "speaking")
         self.send.setText("■" if busy else "➤")
         self.send.setToolTip("Stop" if busy else "Send")
