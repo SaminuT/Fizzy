@@ -23,13 +23,15 @@ from fizzy.context.tracker import ForegroundTracker
 from fizzy.context.window import WindowInfo
 from fizzy.runtime import AsyncRunner
 from fizzy.settings import CONTEXT_SCREEN, Settings
-from fizzy.speech import stt
+from fizzy.speech import stt, tts
 from fizzy.speech.endpoint import Endpointer
 from fizzy.speech.mic import BYTES_PER_SECOND, FRAME, RATE, Microphone
+from fizzy.speech.text import split_steps
 
 log = logging.getLogger(__name__)
 
 HISTORY_TURNS = 8   # question/answer pairs remembered per app
+STEP_BY_STEP_MIN = 3    # answers with this many numbered steps are spoken one step at a time
 MIN_AUDIO_S = 0.3
 STT_TIMEOUT_S = 120
 
@@ -54,6 +56,10 @@ class Session(QObject):
         self.mic = mic
         self.mic.on_level = self._on_mic_level
         self._transcriber: Optional[stt.Transcriber] = None
+        self._speaker: Optional[tts.Speaker] = None
+        self._steps: list[str] = []
+        self._step = 0
+        self._last_spoken = ""
         self._endpointer: Optional[Endpointer] = None
         self._ep_lock = threading.Lock()
         self._utterance_over = threading.Event()
@@ -70,12 +76,14 @@ class Session(QObject):
     def ask_text(self, text: str, highlighted: Optional[str] = None) -> None:
         """A typed question, with the highlighted text to include, if any."""
         win = self.tracker.current()
-        self.runner.submit(self._start(self._turn(text, win, highlighted)), on_error=self._report)
+        self.runner.submit(self._start(self._handle(text, win, highlighted, spoken=self.settings.speak_typed)),
+                           on_error=self._report)
 
     def start_listening(self) -> None:
         """Hotkey down (or wake word): start recording a spoken question."""
         if self.state == "listening":
             return
+        self.stop_speaking()            # talking over Fizzy interrupts it
         self._pressed_at = time.monotonic()
         win = self.tracker.current()
         self.runner.submit(self._start(self._voice_turn(win)), on_error=self._report)
@@ -88,7 +96,19 @@ class Session(QObject):
 
     def cancel(self) -> None:
         self._utterance_over.set()
+        self.stop_speaking()
         self.runner.loop.call_soon_threadsafe(self._cancel_now)
+
+    def stop_speaking(self) -> None:
+        if self._speaker is not None:
+            self._speaker.stop()
+
+    def reset_voice(self) -> None:
+        """Pick the text-to-speech service again (keys or settings changed)."""
+        old, self._speaker = self._speaker, None
+        if old is not None:
+            old.stop()
+            self.runner.submit(old.voice.aclose())
 
     def reset_transcriber(self) -> None:
         """Pick the speech-to-text service again (keys or settings changed)."""
@@ -145,14 +165,14 @@ class Session(QObject):
             self.notice.emit("Didn't catch that. Try again?")
             return
         self.heard.emit(text)
-        if intent.is_stop(text):
+        if await self._command(text):
             return
 
         picked = selection.clean(await uia) if uia else None
         if picked is None and sel_mode and not sensitive and self.settings.clipboard_fallback                 and selection.clipboard_allowed(win):
             # The hotkey is released by now, so Ctrl+C reaches the app intact.
             picked = selection.clean(await asyncio.to_thread(selection.read_via_clipboard))
-        await self._turn(text, win, picked)
+        await self._turn(text, win, picked, spoken=True)
 
     async def _record(self) -> bytes:
         if not self.mic.is_open:
@@ -187,7 +207,24 @@ class Session(QObject):
         if ep is not None:
             self.level.emit(rms)
 
-    async def _turn(self, question: str, win: WindowInfo, highlighted: Optional[str]) -> None:
+    async def _handle(self, text: str, win: WindowInfo, highlighted: Optional[str], spoken: bool) -> None:
+        if not await self._command(text):
+            await self._turn(text, win, highlighted, spoken)
+
+    async def _command(self, text: str) -> bool:
+        """Quick commands that need no AI call. True if text was one."""
+        if intent.is_stop(text):
+            return True
+        if intent.is_repeat(text) and self._last_spoken:
+            await self._say(self._last_spoken)
+            return True
+        if intent.is_next(text) and self._steps:
+            await self._next_step()
+            return True
+        return False
+
+    async def _turn(self, question: str, win: WindowInfo, highlighted: Optional[str],
+                    spoken: bool = False) -> None:
         self._set_state("thinking")
         self.answer_started.emit(question)
         ctx = await gather(self.settings, win, vision=self.provider.vision, selection=highlighted,
@@ -203,6 +240,46 @@ class Session(QObject):
         answer = await self._stream(req)
         self._remember(win.app_key, question, answer)
         self.answer_done.emit(answer)
+        if spoken:
+            await self._speak_answer(answer)
+
+    # ── speaking ────────────────────────────────────────────────────────
+
+    async def _speak_answer(self, answer: str) -> None:
+        intro, steps = split_steps(answer)
+        if len(steps) >= STEP_BY_STEP_MIN:
+            # Long walkthroughs are easier to follow one step at a time.
+            self._steps, self._step = steps, 0
+            text = f"{intro}\nStep 1. {steps[0]}\nSay next when you're ready."
+        else:
+            self._steps = []
+            text = answer
+        await self._say(text)
+
+    async def _next_step(self) -> None:
+        self._step += 1
+        if self._step >= len(self._steps):
+            self._steps = []
+            await self._say("That was the last step.")
+            return
+        n, total = self._step + 1, len(self._steps)
+        tail = "That's the last step." if n == total else "Say next for the following step."
+        await self._say(f"Step {n}. {self._steps[self._step]}\n{tail}")
+
+    async def _say(self, text: str) -> None:
+        if self._speaker is None:
+            self._speaker = tts.Speaker(tts.choose(self.settings))
+        self._last_spoken = text
+        self._set_state("speaking")
+        try:
+            await self._speaker.say(text)
+        except ProviderError:
+            raise
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.exception("speech failed")
+            self.notice.emit(f"Couldn't speak the answer ({self._speaker.voice.label}): {e}")
 
     async def _stream(self, req: Request) -> str:
         parts: list[str] = []
