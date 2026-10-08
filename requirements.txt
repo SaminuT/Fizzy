@@ -11,3 +11,5 @@ keyboard>=0.13
 numpy>=1.26
 sounddevice>=0.4.6
 faster-whisper>=1.0
+edge-tts>=7.0
+miniaudio>=1.59
