@@ -22,6 +22,7 @@ from fizzy.speech.mic import Microphone
 from fizzy.settings import (
     CONTEXT_MODES, CONTEXT_SCREEN, CONTEXT_SELECTION_ONLY, CONTEXT_SELECTION_OR_SCREEN, Settings,
 )
+from fizzy.ui.keys_dialog import KeysDialog
 from fizzy.ui.panel import Panel
 from fizzy.ui.theme import app_icon
 from fizzy.ui.tray import Tray
@@ -145,6 +146,27 @@ class FizzyApp:
         self._toggle(ctx, "Capture all monitors", "all_monitors")
         self._toggle(ctx, "Copy-to-read fallback (uses the clipboard)", "clipboard_fallback")
         self._toggle(menu, "Privacy guard", "privacy_guard")
+        menu.addSeparator()
+        keys = QAction("Keys and sign-in…", menu)
+        keys.triggered.connect(self.open_keys)
+        menu.addAction(keys)
+
+    def open_keys(self) -> None:
+        dlg = KeysDialog(self.settings, self._sign_ins())
+        dlg.saved.connect(self._on_keys_saved)
+        dlg.exec()
+
+    def _sign_ins(self) -> dict:
+        return {}
+
+    def _on_keys_saved(self) -> None:
+        # Rebuild everything that captured a key or URL.
+        provider = registry.build(self.session.provider.id, self.settings)
+        self.session.set_provider(provider)
+        self.session.reset_transcriber()
+        self.session.reset_voice()
+        self._show_provider(provider)
+        self.tray.rebuild()
 
     def _toggle(self, menu: QMenu, label: str, field: str, after=None) -> QAction:
         a = QAction(label, menu, checkable=True, checked=bool(getattr(self.settings, field)))
