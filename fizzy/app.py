@@ -5,11 +5,13 @@ from __future__ import annotations
 import logging
 import sys
 
+from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox
 
 from fizzy import APP_NAME, __version__, logs, single_instance
-from fizzy.ai.anthropic_provider import AnthropicProvider
+from fizzy.ai import registry
+from fizzy.ai.base import Provider
 from fizzy.context.screen import ScreenLayout
 from fizzy.context.selection_watch import SelectionWatcher
 from fizzy.context.tracker import ForegroundTracker
@@ -33,22 +35,25 @@ CONTEXT_LABELS = {
 }
 
 
+class _Bridge(QObject):
+    """Carries results from the background loop back to the GUI thread."""
+    models_ready = pyqtSignal(str, list)    # provider id, [(id, title)]
+
+
 class FizzyApp:
     def __init__(self, qt: QApplication):
         self.qt = qt
         self.settings = Settings.load()
         self.runner = AsyncRunner()
+        self.bridge = _Bridge()
         self.tracker = ForegroundTracker()
         self.selection = SelectionWatcher()
-        provider = AnthropicProvider()
+        provider = registry.startup_provider(self.settings)
         self.mic = Microphone(self.settings.mic_device)
         self.session = Session(self.settings, self.runner, provider, self.tracker, self.mic)
         self.hotkey = Hotkey(self.settings.hotkey)
 
         self.panel = Panel()
-        self.panel.set_provider(provider.label)
-        self.panel.set_models([(provider.default_model, provider.default_model)],
-                              self.settings.model_for(provider.id) or provider.default_model)
         self.tray = Tray()
         self.tray.set_builder(self._build_menu)
         self._connect()
@@ -71,10 +76,64 @@ class FizzyApp:
         self.hotkey.escape.connect(lambda: s.cancel() if s.state != "idle" else None)
         self.tray.show_panel.connect(p.focus_input)
         self.tray.quit_requested.connect(self.quit)
+        self.bridge.models_ready.connect(self._on_models_ready)
+
+    # ── providers and models ────────────────────────────────────────────
+
+    def switch_provider(self, pid: str) -> None:
+        if pid == self.session.provider.id:
+            return
+        provider = registry.build(pid, self.settings)
+        self.settings.provider = pid
+        self.settings.save()
+        self.session.set_provider(provider)
+        self._show_provider(provider)
+        self.tray.rebuild()
+        if not provider.is_configured():
+            self.panel.show_error(f"{provider.label} needs a key or sign-in. Use Tray → Keys and sign-in.")
+
+    def _show_provider(self, provider: Provider) -> None:
+        self.panel.set_provider(provider.label)
+        models, fresh = registry.cached_models(provider.id)
+        self._fill_models(provider, [(m.id, m.title) for m in models])
+        if not fresh and provider.is_configured():
+            self.runner.submit(self._fetch_models(provider))
+
+    async def _fetch_models(self, provider: Provider) -> None:
+        try:
+            models = await registry.refresh_models(provider)
+        except Exception as e:
+            log.info("couldn't list %s models: %s", provider.id, e)
+            return
+        self.bridge.models_ready.emit(provider.id, [(m.id, m.title) for m in models])
+
+    def _on_models_ready(self, pid: str, models: list) -> None:
+        if pid == self.session.provider.id:
+            self._fill_models(self.session.provider, models)
+
+    def _fill_models(self, provider: Provider, models: list) -> None:
+        current = self.settings.model_for(provider.id) or provider.default_model
+        if not models and provider.default_model:
+            models = [(provider.default_model, provider.default_model)]
+        self.panel.set_models(models, current or None)
 
     # ── tray menu ───────────────────────────────────────────────────────
 
     def _build_menu(self, menu: QMenu) -> None:
+        ai = menu.addMenu("AI")
+        group = QActionGroup(ai)
+        for e in registry.ENTRIES:
+            provider_ready = e.local or e.build(self.settings).is_configured()
+            label = e.label if provider_ready else f"{e.label}  (needs a key)"
+            a = QAction(label, ai, checkable=True, checked=self.session.provider.id == e.id)
+            a.triggered.connect(lambda _c, pid=e.id: self.switch_provider(pid))
+            group.addAction(a)
+            ai.addAction(a)
+        ai.addSeparator()
+        refresh = QAction("Refresh model list", ai)
+        refresh.triggered.connect(lambda: self.runner.submit(self._fetch_models(self.session.provider)))
+        ai.addAction(refresh)
+
         ctx = menu.addMenu("Screen context")
         group = QActionGroup(ctx)
         for mode in CONTEXT_MODES:
@@ -124,6 +183,7 @@ class FizzyApp:
             log.exception("couldn't register the hotkey")
             self.tray.notify(APP_NAME, f"Couldn't register the hotkey {self.settings.hotkey}. "
                                        "Typing in the panel still works.")
+        self._show_provider(self.session.provider)
         self.tray.show()
         self.panel.show_near_corner()
         log.info("ready (provider=%s)", self.session.provider.id)
