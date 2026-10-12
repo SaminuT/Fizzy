@@ -45,6 +45,11 @@ def _gemini(_s: Settings) -> Provider:
     return GeminiProvider()
 
 
+def _copilot(_s: Settings) -> Provider:
+    from fizzy.ai.copilot_provider import CopilotProvider
+    return CopilotProvider()
+
+
 def _ollama(s: Settings) -> Provider:
     from fizzy.ai.ollama_provider import OllamaProvider
     return OllamaProvider(s.ollama_host)
@@ -60,6 +65,7 @@ ENTRIES: list[Entry] = [
     Entry("openai", "OpenAI", _openai),
     Entry("chatgpt", "ChatGPT (sign-in)", _chatgpt),
     Entry("gemini", "Gemini", _gemini),
+    Entry("copilot", "GitHub Copilot", _copilot),
     Entry("ollama", "Ollama", _ollama, local=True),
     Entry("lmstudio", "LM Studio", _lmstudio, local=True),
 ]

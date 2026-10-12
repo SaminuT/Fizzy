@@ -40,6 +40,7 @@ class _Bridge(QObject):
     """Carries results from the background loop back to the GUI thread."""
     models_ready = pyqtSignal(str, list)    # provider id, [(id, title)]
     signed_in = pyqtSignal(str, str)        # sign-in id, error message ("" = success)
+    device_code = pyqtSignal(str, str)      # GitHub user code, verification URL
 
 
 class FizzyApp:
@@ -80,6 +81,7 @@ class FizzyApp:
         self.tray.quit_requested.connect(self.quit)
         self.bridge.models_ready.connect(self._on_models_ready)
         self.bridge.signed_in.connect(self._on_signed_in)
+        self.bridge.device_code.connect(self._on_device_code)
 
     # ── providers and models ────────────────────────────────────────────
 
@@ -164,7 +166,12 @@ class FizzyApp:
         from fizzy.ai import chatgpt_auth
         chatgpt = chatgpt_auth.load()
         who = f" ({chatgpt.email})" if chatgpt.signed_in and chatgpt.email else ""
-        return {"chatgpt": (f"ChatGPT{who}", chatgpt.signed_in)}
+        from fizzy.ai.copilot_provider import SECRET_NAME as GITHUB_SECRET
+        from fizzy.settings import get_secret
+        return {
+            "chatgpt": (f"ChatGPT{who}", chatgpt.signed_in),
+            "copilot": ("GitHub Copilot", bool(get_secret(GITHUB_SECRET))),
+        }
 
     # ── account sign-ins ────────────────────────────────────────────────
 
@@ -178,6 +185,9 @@ class FizzyApp:
             if sid == "chatgpt":
                 from fizzy.ai import chatgpt_auth
                 await chatgpt_auth.sign_in()
+            elif sid == "copilot":
+                from fizzy.ai import copilot_provider
+                await copilot_provider.device_sign_in(self.bridge.device_code.emit)
             self.bridge.signed_in.emit(sid, "")
         except Exception as e:
             log.exception("%s sign-in failed", sid)
@@ -195,7 +205,16 @@ class FizzyApp:
         if sid == "chatgpt":
             from fizzy.ai import chatgpt_auth
             chatgpt_auth.sign_out()
+        elif sid == "copilot":
+            from fizzy.ai import copilot_provider
+            copilot_provider.sign_out()
         self.tray.rebuild()
+
+    def _on_device_code(self, code: str, url: str) -> None:
+        QApplication.clipboard().setText(code)
+        self.panel.show_near_corner()
+        self.panel.set_answer(f"**Enter this code on GitHub:** `{code}`\n\nIt's on your clipboard. "
+                              f"The page is opening in your browser: {url}")
 
     def _on_keys_saved(self) -> None:
         # Rebuild everything that captured a key or URL.

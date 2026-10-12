@@ -41,11 +41,17 @@ class OpenAICompatible(Provider):
             key = self._key()
             if not key:
                 raise ProviderError(f"Add your {self.label} API key under Tray → Keys and sign-in.")
-            kwargs = {"api_key": key, "max_retries": 1}
+            kwargs = {"api_key": key, "max_retries": 1, "default_headers": self._default_headers()}
             if self.base_url:
                 kwargs["base_url"] = self.base_url
             self._client = AsyncOpenAI(**kwargs)
         return self._client
+
+    def _default_headers(self) -> dict:
+        return {}
+
+    def _request_headers(self, req: Request) -> dict:
+        return {}
 
     @property
     def official(self) -> bool:
@@ -103,9 +109,10 @@ class OpenAICompatible(Provider):
         client = self._api()
         model = self.model_or_default(req)
         params = self._params(model, req)
+        headers = self._request_headers(req)
         for attempt in range(4):
             try:
-                stream = await client.chat.completions.create(**params)
+                stream = await client.chat.completions.create(**params, extra_headers=headers or None)
                 break
             except openai.BadRequestError as e:
                 if attempt < 3 and self._relax(params, str(e)):
