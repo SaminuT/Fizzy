@@ -153,6 +153,8 @@ class FizzyApp:
         self._toggle(ctx, "Capture all monitors", "all_monitors")
         self._toggle(ctx, "Copy-to-read fallback (uses the clipboard)", "clipboard_fallback")
         self._toggle(menu, "Privacy guard", "privacy_guard")
+        self._toggle(menu, "Show the buddy", "show_buddy", after=self.buddy.set_visible)
+        self._toggle(menu, "Read typed answers aloud", "speak_typed")
         menu.addSeparator()
         keys = QAction("Keys and sign-in…", menu)
         keys.triggered.connect(self.open_keys)
