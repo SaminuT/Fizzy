@@ -22,6 +22,7 @@ from fizzy.speech.mic import Microphone
 from fizzy.settings import (
     CONTEXT_MODES, CONTEXT_SCREEN, CONTEXT_SELECTION_ONLY, CONTEXT_SELECTION_OR_SCREEN, Settings,
 )
+from fizzy.ui.buddy import Buddy
 from fizzy.ui.keys_dialog import KeysDialog
 from fizzy.ui.panel import Panel
 from fizzy.ui.theme import app_icon
@@ -57,6 +58,7 @@ class FizzyApp:
         self.hotkey = Hotkey(self.settings.hotkey)
 
         self.panel = Panel()
+        self.buddy = Buddy()
         self.tray = Tray()
         self.tray.set_builder(self._build_menu)
         self._connect()
@@ -68,6 +70,7 @@ class FizzyApp:
         p.stop_requested.connect(s.cancel)
         p.model_chosen.connect(self._on_model_chosen)
         s.state_changed.connect(p.set_state)
+        s.state_changed.connect(self.buddy.set_state)
         s.answer_started.connect(p.start_answer)
         s.answer_chunk.connect(p.append_answer)
         s.answer_done.connect(p.set_answer)
@@ -263,6 +266,8 @@ class FizzyApp:
             self.tray.notify(APP_NAME, f"Couldn't register the hotkey {self.settings.hotkey}. "
                                        "Typing in the panel still works.")
         self._show_provider(self.session.provider)
+        self.buddy.start()
+        self.buddy.set_visible(self.settings.show_buddy)
         self.tray.show()
         self.panel.show_near_corner()
         log.info("ready (provider=%s)", self.session.provider.id)
@@ -271,6 +276,7 @@ class FizzyApp:
         log.info("quitting")
         self.session.cancel()
         self.selection.stop()
+        self.buddy.stop()
         self.hotkey.stop()
         self.mic.close()
         try:

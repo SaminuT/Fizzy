@@ -46,6 +46,7 @@ class Settings:
     privacy_guard: bool = True
 
     speak_typed: bool = True        # read answers to typed questions aloud too
+    show_buddy: bool = True
     wake_word: bool = False
 
     mic_device: Optional[int] = None
