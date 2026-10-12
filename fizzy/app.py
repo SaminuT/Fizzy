@@ -39,6 +39,7 @@ CONTEXT_LABELS = {
 class _Bridge(QObject):
     """Carries results from the background loop back to the GUI thread."""
     models_ready = pyqtSignal(str, list)    # provider id, [(id, title)]
+    signed_in = pyqtSignal(str, str)        # sign-in id, error message ("" = success)
 
 
 class FizzyApp:
@@ -78,6 +79,7 @@ class FizzyApp:
         self.tray.show_panel.connect(p.focus_input)
         self.tray.quit_requested.connect(self.quit)
         self.bridge.models_ready.connect(self._on_models_ready)
+        self.bridge.signed_in.connect(self._on_signed_in)
 
     # ── providers and models ────────────────────────────────────────────
 
@@ -154,10 +156,46 @@ class FizzyApp:
     def open_keys(self) -> None:
         dlg = KeysDialog(self.settings, self._sign_ins())
         dlg.saved.connect(self._on_keys_saved)
+        dlg.sign_in_requested.connect(self.sign_in)
+        dlg.sign_out_requested.connect(self.sign_out)
         dlg.exec()
 
     def _sign_ins(self) -> dict:
-        return {}
+        from fizzy.ai import chatgpt_auth
+        chatgpt = chatgpt_auth.load()
+        who = f" ({chatgpt.email})" if chatgpt.signed_in and chatgpt.email else ""
+        return {"chatgpt": (f"ChatGPT{who}", chatgpt.signed_in)}
+
+    # ── account sign-ins ────────────────────────────────────────────────
+
+    def sign_in(self, sid: str) -> None:
+        self.panel.show_near_corner()
+        self.panel.set_answer("Finish signing in in your browser…")
+        self.runner.submit(self._sign_in(sid))
+
+    async def _sign_in(self, sid: str) -> None:
+        try:
+            if sid == "chatgpt":
+                from fizzy.ai import chatgpt_auth
+                await chatgpt_auth.sign_in()
+            self.bridge.signed_in.emit(sid, "")
+        except Exception as e:
+            log.exception("%s sign-in failed", sid)
+            self.bridge.signed_in.emit(sid, str(e) or type(e).__name__)
+
+    def _on_signed_in(self, sid: str, error: str) -> None:
+        if error:
+            self.panel.show_error(error)
+            return
+        self.panel.set_answer("Signed in. Ask away!")
+        self.switch_provider(sid)
+        self.tray.rebuild()
+
+    def sign_out(self, sid: str) -> None:
+        if sid == "chatgpt":
+            from fizzy.ai import chatgpt_auth
+            chatgpt_auth.sign_out()
+        self.tray.rebuild()
 
     def _on_keys_saved(self) -> None:
         # Rebuild everything that captured a key or URL.

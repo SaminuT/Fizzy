@@ -35,6 +35,11 @@ def _openai(s: Settings) -> Provider:
     return OpenAIProvider(s.openai_base_url)
 
 
+def _chatgpt(_s: Settings) -> Provider:
+    from fizzy.ai.chatgpt_provider import ChatGPTProvider
+    return ChatGPTProvider()
+
+
 def _gemini(_s: Settings) -> Provider:
     from fizzy.ai.gemini_provider import GeminiProvider
     return GeminiProvider()
@@ -53,6 +58,7 @@ def _lmstudio(s: Settings) -> Provider:
 ENTRIES: list[Entry] = [
     Entry("anthropic", "Claude", _anthropic),
     Entry("openai", "OpenAI", _openai),
+    Entry("chatgpt", "ChatGPT (sign-in)", _chatgpt),
     Entry("gemini", "Gemini", _gemini),
     Entry("ollama", "Ollama", _ollama, local=True),
     Entry("lmstudio", "LM Studio", _lmstudio, local=True),
