@@ -15,3 +15,4 @@ sounddevice>=0.4.6
 faster-whisper>=1.0
 edge-tts>=7.0
 miniaudio>=1.59
+rapidocr-onnxruntime>=1.3
