@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, QPointF, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox
 
@@ -71,6 +71,8 @@ class FizzyApp:
         p.model_chosen.connect(self._on_model_chosen)
         s.state_changed.connect(p.set_state)
         s.state_changed.connect(self.buddy.set_state)
+        s.point.connect(lambda x, y, label: self.buddy.point_at(QPointF(x, y), label))
+        s.unpoint.connect(self.buddy.release)
         s.answer_started.connect(p.start_answer)
         s.answer_chunk.connect(p.append_answer)
         s.answer_done.connect(p.set_answer)

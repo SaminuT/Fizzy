@@ -27,11 +27,13 @@ from fizzy.speech import stt, tts
 from fizzy.speech.endpoint import Endpointer
 from fizzy.speech.mic import BYTES_PER_SECOND, FRAME, RATE, Microphone
 from fizzy.speech.text import split_steps
+from fizzy.pointing.tags import POINTING_PROMPT, PointTag, TagFilter, strip_tags
 
 log = logging.getLogger(__name__)
 
 HISTORY_TURNS = 8   # question/answer pairs remembered per app
 STEP_BY_STEP_MIN = 3    # answers with this many numbered steps are spoken one step at a time
+POINT_HOLD_S = 4.0      # keep pointing this long after a silent answer
 MIN_AUDIO_S = 0.3
 STT_TIMEOUT_S = 120
 
@@ -45,6 +47,8 @@ class Session(QObject):
     notice = pyqtSignal(str)                # short status note, e.g. "Didn't catch that"
     level = pyqtSignal(float)               # mic level while listening
     heard = pyqtSignal(str)                 # what speech-to-text made of it
+    point = pyqtSignal(float, float, str)   # global logical x, y, label
+    unpoint = pyqtSignal()
 
     def __init__(self, settings: Settings, runner: AsyncRunner, provider: Provider,
                  tracker: ForegroundTracker, mic: Microphone):
@@ -60,6 +64,7 @@ class Session(QObject):
         self._steps: list[str] = []
         self._step = 0
         self._last_spoken = ""
+        self._pointed = False
         self._endpointer: Optional[Endpointer] = None
         self._ep_lock = threading.Lock()
         self._utterance_over = threading.Event()
@@ -226,22 +231,39 @@ class Session(QObject):
     async def _turn(self, question: str, win: WindowInfo, highlighted: Optional[str],
                     spoken: bool = False) -> None:
         self._set_state("thinking")
+        self.unpoint.emit()
         self.answer_started.emit(question)
         ctx = await gather(self.settings, win, vision=self.provider.vision, selection=highlighted,
                            pointing=intent.wants_pointing(question))
         self.last_context = ctx
         req = Request(
-            system=prompts.system_prompt(ctx.lines),
+            system=prompts.system_prompt(ctx.lines, POINTING_PROMPT if ctx.shots else ""),
             text=compose_question(question, ctx.selection),
             history=list(self._history.get(win.app_key, [])),
             images=ctx.images,
             model=self.settings.model_for(self.provider.id),
         )
-        answer = await self._stream(req)
+        self._pointed = False
+        answer = await self._stream(req, ctx)
         self._remember(win.app_key, question, answer)
         self.answer_done.emit(answer)
-        if spoken:
-            await self._speak_answer(answer)
+        try:
+            if spoken:
+                await self._speak_answer(answer)
+            elif self._pointed:
+                await asyncio.sleep(POINT_HOLD_S)
+        finally:
+            self.unpoint.emit()
+
+    def _point_at(self, tag: PointTag, ctx: Context) -> None:
+        if not ctx.shots:
+            return
+        shot = ctx.shots[min(tag.screen, len(ctx.shots)) - 1]
+        px, py = shot.norm_to_physical(tag.x, tag.y)
+        lx, ly = shot.monitor.to_logical(px, py)
+        if not self._pointed:       # the first thing named is the one to show
+            self._pointed = True
+            self.point.emit(lx, ly, tag.label)
 
     # ── speaking ────────────────────────────────────────────────────────
 
@@ -281,12 +303,21 @@ class Session(QObject):
             log.exception("speech failed")
             self.notice.emit(f"Couldn't speak the answer ({self._speaker.voice.label}): {e}")
 
-    async def _stream(self, req: Request) -> str:
+    async def _stream(self, req: Request, ctx: Optional[Context] = None) -> str:
         parts: list[str] = []
+        tags = TagFilter()
         try:
             async for chunk in self.provider.stream(req):
                 parts.append(chunk)
-                self.answer_chunk.emit(chunk)
+                shown, found = tags.feed(chunk)
+                if shown:
+                    self.answer_chunk.emit(shown)
+                for tag in found:
+                    if ctx is not None:
+                        self._point_at(tag, ctx)
+            rest = tags.flush()
+            if rest:
+                self.answer_chunk.emit(rest)
         except ProviderError:
             raise
         except asyncio.CancelledError:
@@ -294,7 +325,7 @@ class Session(QObject):
         except Exception as e:
             log.exception("%s request failed", self.provider.id)
             raise ProviderError(f"{self.provider.label} request failed: {e}") from e
-        answer = "".join(parts).strip()
+        answer = strip_tags("".join(parts))
         if not answer:
             raise ProviderError(f"{self.provider.label} sent back an empty answer. Try again or pick another model.")
         return answer
