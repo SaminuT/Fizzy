@@ -79,10 +79,12 @@ class Session(QObject):
 
     # ── called from the Qt thread ───────────────────────────────────────
 
-    def ask_text(self, text: str, highlighted: Optional[str] = None) -> None:
-        """A typed question, with the highlighted text to include, if any."""
+    def ask_text(self, text: str, highlighted: Optional[str] = None, spoken: Optional[bool] = None) -> None:
+        """A typed question (or one said right after the wake word), with any highlighted text."""
         win = self.tracker.current()
-        self.runner.submit(self._start(self._handle(text, win, highlighted, spoken=self.settings.speak_typed)),
+        if spoken is None:
+            spoken = self.settings.speak_typed
+        self.runner.submit(self._start(self._handle(text, win, highlighted, spoken=spoken)),
                            on_error=self._report)
 
     def start_listening(self) -> None:

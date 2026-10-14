@@ -19,6 +19,7 @@ from fizzy.hotkey import Hotkey
 from fizzy.runtime import AsyncRunner
 from fizzy.session import Session
 from fizzy.speech.mic import Microphone
+from fizzy.speech.wake import WakeListener
 from fizzy.settings import (
     CONTEXT_MODES, CONTEXT_SCREEN, CONTEXT_SELECTION_ONLY, CONTEXT_SELECTION_OR_SCREEN, Settings,
 )
@@ -56,6 +57,7 @@ class FizzyApp:
         self.mic = Microphone(self.settings.mic_device)
         self.session = Session(self.settings, self.runner, provider, self.tracker, self.mic)
         self.hotkey = Hotkey(self.settings.hotkey)
+        self.wake: WakeListener | None = None
 
         self.panel = Panel()
         self.buddy = Buddy()
@@ -71,6 +73,7 @@ class FizzyApp:
         p.model_chosen.connect(self._on_model_chosen)
         s.state_changed.connect(p.set_state)
         s.state_changed.connect(self.buddy.set_state)
+        s.state_changed.connect(self._on_state)
         s.point.connect(lambda x, y, label: self.buddy.point_at(QPointF(x, y), label))
         s.unpoint.connect(self.buddy.release)
         s.answer_started.connect(p.start_answer)
@@ -154,6 +157,7 @@ class FizzyApp:
         ctx.addSeparator()
         self._toggle(ctx, "Capture all monitors", "all_monitors")
         self._toggle(ctx, "Copy-to-read fallback (uses the clipboard)", "clipboard_fallback")
+        self._toggle(menu, 'Wake word ("Fizzy")', "wake_word", after=self._set_wake_word)
         self._toggle(menu, "Privacy guard", "privacy_guard")
         self._toggle(menu, "Show the buddy", "show_buddy", after=self.buddy.set_visible)
         self._toggle(menu, "Read typed answers aloud", "speak_typed")
@@ -250,6 +254,39 @@ class FizzyApp:
         self.settings.save()
         self.selection.set_enabled(mode != CONTEXT_SCREEN)
 
+    # ── wake word ───────────────────────────────────────────────────────
+
+    def _set_wake_word(self, on: bool) -> None:
+        if on and self.wake is None:
+            self.wake = WakeListener()
+            self.wake.woke.connect(self._on_wake)
+            self.wake.start()
+            self.mic.on_frame = self.wake.on_frame
+            try:
+                self.mic.open()
+            except Exception as e:
+                log.exception("mic failed for wake word")
+                self.panel.show_error(f"Couldn't open the microphone for the wake word: {e}")
+        elif not on and self.wake is not None:
+            self.mic.on_frame = None
+            self.wake.stop()
+            self.wake = None
+            if self.session.state == "idle":
+                self.mic.close()
+
+    def _on_wake(self, rest: str) -> None:
+        if self.session.state != "idle":
+            return
+        if len(rest.split()) >= 2:
+            # "Fizzy, what's this error?" — the question came with the name.
+            self.session.ask_text(rest, spoken=True)
+        else:
+            self.session.start_listening()
+
+    def _on_state(self, state: str) -> None:
+        if self.wake is not None:
+            self.wake.paused = state != "idle"
+
     def _on_model_chosen(self, model: str) -> None:
         if model:
             self.settings.set_model(self.session.provider.id, model)
@@ -271,6 +308,8 @@ class FizzyApp:
                                        "Typing in the panel still works.")
         self._show_provider(self.session.provider)
         self.buddy.start()
+        if self.settings.wake_word:
+            self._set_wake_word(True)
         from fizzy.pointing import locate
         locate.warm_up()
         self.buddy.set_visible(self.settings.show_buddy)
@@ -283,6 +322,7 @@ class FizzyApp:
         self.session.cancel()
         self.selection.stop()
         self.buddy.stop()
+        self._set_wake_word(False)
         self.hotkey.stop()
         self.mic.close()
         try:
