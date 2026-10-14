@@ -271,6 +271,8 @@ class FizzyApp:
                                        "Typing in the panel still works.")
         self._show_provider(self.session.provider)
         self.buddy.start()
+        from fizzy.pointing import locate
+        locate.warm_up()
         self.buddy.set_visible(self.settings.show_buddy)
         self.tray.show()
         self.panel.show_near_corner()

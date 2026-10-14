@@ -17,7 +17,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from fizzy import intent, prompts
 from fizzy.ai.base import Message, Provider, ProviderError, Request
-from fizzy.context import privacy, selection
+from fizzy.context import privacy, screen, selection
 from fizzy.context.gather import Context, compose_question, gather
 from fizzy.context.tracker import ForegroundTracker
 from fizzy.context.window import WindowInfo
@@ -27,6 +27,7 @@ from fizzy.speech import stt, tts
 from fizzy.speech.endpoint import Endpointer
 from fizzy.speech.mic import BYTES_PER_SECOND, FRAME, RATE, Microphone
 from fizzy.speech.text import split_steps
+from fizzy.pointing import locate
 from fizzy.pointing.tags import POINTING_PROMPT, PointTag, TagFilter, strip_tags
 
 log = logging.getLogger(__name__)
@@ -233,18 +234,40 @@ class Session(QObject):
         self._set_state("thinking")
         self.unpoint.emit()
         self.answer_started.emit(question)
+        pointing = intent.wants_pointing(question)
         ctx = await gather(self.settings, win, vision=self.provider.vision, selection=highlighted,
-                           pointing=intent.wants_pointing(question))
+                           pointing=pointing)
         self.last_context = ctx
+        self._pointed = False
+        model = self.settings.model_for(self.provider.id)
+
+        slow: Optional[asyncio.Task] = None
+        if pointing and ctx.shots:
+            target = intent.target_phrase(question)
+            found = await locate.fast(win, target, ctx.shots)
+            if found:
+                self._point_found(found, ctx, target)
+            else:
+                shot = self._pointer_shot(ctx)
+                slow = asyncio.create_task(locate.slow(self.provider, model, shot, target))
+
         req = Request(
             system=prompts.system_prompt(ctx.lines, POINTING_PROMPT if ctx.shots else ""),
             text=compose_question(question, ctx.selection),
             history=list(self._history.get(win.app_key, [])),
             images=ctx.images,
-            model=self.settings.model_for(self.provider.id),
+            model=model,
         )
-        self._pointed = False
-        answer = await self._stream(req, ctx)
+        try:
+            answer = await self._stream(req, ctx)
+            if slow is not None and not self._pointed:
+                # The model didn't point; use OCR or the grid if they found it.
+                found = await slow
+                if found:
+                    self._point_found(found, ctx, intent.target_phrase(question))
+        finally:
+            if slow is not None:
+                slow.cancel()
         self._remember(win.app_key, question, answer)
         self.answer_done.emit(answer)
         try:
@@ -255,15 +278,37 @@ class Session(QObject):
         finally:
             self.unpoint.emit()
 
-    def _point_at(self, tag: PointTag, ctx: Context) -> None:
-        if not ctx.shots:
+    @staticmethod
+    def _pointer_shot(ctx: Context):
+        pos = screen.pointer_physical()
+        if pos:
+            for s in ctx.shots:
+                if s.monitor.contains(*pos):
+                    return s
+        return ctx.shots[0]
+
+    def _point_found(self, found, ctx: Context, target: str) -> None:
+        """Point at a locator hit and tell the model where it is."""
+        shot = locate.shot_for(found, ctx.shots)
+        if shot is None or self._pointed:
             return
+        self._pointed = True
+        lx, ly = shot.monitor.to_logical(found.x, found.y)
+        label = target if len(target) <= 30 else found.label[:30]
+        self.point.emit(lx, ly, label)
+        nx, ny = shot.physical_to_norm(found.x, found.y)
+        n = ctx.shots.index(shot) + 1
+        ctx.lines.append(f'Found on screen: "{found.label}" at x={nx}, y={ny} in screenshot {n}. '
+                         "Fizzy is already pointing at it, so don't add another point tag.")
+
+    def _point_at(self, tag: PointTag, ctx: Context) -> None:
+        if not ctx.shots or self._pointed:
+            return      # the first thing named is the one to show
         shot = ctx.shots[min(tag.screen, len(ctx.shots)) - 1]
         px, py = shot.norm_to_physical(tag.x, tag.y)
         lx, ly = shot.monitor.to_logical(px, py)
-        if not self._pointed:       # the first thing named is the one to show
-            self._pointed = True
-            self.point.emit(lx, ly, tag.label)
+        self._pointed = True
+        self.point.emit(lx, ly, tag.label)
 
     # ── speaking ────────────────────────────────────────────────────────
 
