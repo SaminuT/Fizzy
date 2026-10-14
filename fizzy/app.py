@@ -31,6 +31,20 @@ from fizzy.ui.tray import Tray
 
 log = logging.getLogger("fizzy")
 
+HOTKEYS = ["ctrl+alt+space", "ctrl+shift+space", "alt+shift+f", "ctrl+windows"]
+VOICES = [
+    ("", "Default (Ava, multilingual)"),
+    ("en-US-AndrewMultilingualNeural", "Andrew (multilingual)"),
+    ("en-US-EmmaMultilingualNeural", "Emma (multilingual)"),
+    ("en-GB-SoniaNeural", "Sonia (British)"),
+    ("en-GB-RyanNeural", "Ryan (British)"),
+    ("en-AU-NatashaNeural", "Natasha (Australian)"),
+    ("en-IN-NeerjaNeural", "Neerja (Indian English)"),
+]
+STT_CHOICES = [("auto", "Automatic"), ("local", "Whisper on this PC"), ("openai", "OpenAI"),
+               ("deepgram", "Deepgram")]
+WHISPER_SIZES = ["tiny", "base", "small", "medium"]
+
 CONTEXT_LABELS = {
     CONTEXT_SCREEN: "Screenshot",
     CONTEXT_SELECTION_OR_SCREEN: "Highlighted text, else screenshot",
@@ -157,6 +171,7 @@ class FizzyApp:
         ctx.addSeparator()
         self._toggle(ctx, "Capture all monitors", "all_monitors")
         self._toggle(ctx, "Copy-to-read fallback (uses the clipboard)", "clipboard_fallback")
+        self._speech_menu(menu.addMenu("Voice and microphone"))
         self._toggle(menu, 'Wake word ("Fizzy")', "wake_word", after=self._set_wake_word)
         self._toggle(menu, "Privacy guard", "privacy_guard")
         self._toggle(menu, "Show the buddy", "show_buddy", after=self.buddy.set_visible)
@@ -235,6 +250,56 @@ class FizzyApp:
         self.session.reset_voice()
         self._show_provider(provider)
         self.tray.rebuild()
+
+    def _speech_menu(self, menu: QMenu) -> None:
+        from fizzy.speech.mic import list_inputs
+
+        def radio(sub: QMenu, items, current, apply) -> None:
+            group = QActionGroup(sub)
+            for value, label in items:
+                a = QAction(label, sub, checkable=True, checked=value == current)
+                a.triggered.connect(lambda _c, v=value: apply(v))
+                group.addAction(a)
+                sub.addAction(a)
+
+        radio(menu.addMenu("Microphone"), [(None, "Windows default")] + list_inputs(),
+              self.settings.mic_device, self._set_mic)
+        radio(menu.addMenu("Talk hotkey"), [(h, h.replace("windows", "win").title()) for h in HOTKEYS],
+              self.settings.hotkey, self._set_hotkey)
+        radio(menu.addMenu("Voice (free Edge voices)"), VOICES, self.settings.voice, self._set_voice)
+        radio(menu.addMenu("Speech-to-text"), STT_CHOICES, self.settings.stt,
+              lambda v: self._set_speech("stt", v))
+        radio(menu.addMenu("Whisper model size"), [(w, w) for w in WHISPER_SIZES], self.settings.whisper_model,
+              lambda v: self._set_speech("whisper_model", v))
+
+    def _set_mic(self, device) -> None:
+        self.settings.mic_device = device
+        self.settings.save()
+        if self.mic.is_open:
+            self.mic.reopen(device)
+        else:
+            self.mic.device = device
+
+    def _set_hotkey(self, combo: str) -> None:
+        try:
+            self.hotkey.change(combo)
+        except Exception as e:
+            log.exception("hotkey change failed")
+            self.panel.show_error(f"Couldn't use {combo}: {e}")
+            self.hotkey.change(self.settings.hotkey)
+            return
+        self.settings.hotkey = combo
+        self.settings.save()
+
+    def _set_voice(self, voice: str) -> None:
+        self.settings.voice = voice
+        self.settings.save()
+        self.session.reset_voice()
+
+    def _set_speech(self, field: str, value: str) -> None:
+        setattr(self.settings, field, value)
+        self.settings.save()
+        self.session.reset_transcriber()
 
     def _toggle(self, menu: QMenu, label: str, field: str, after=None) -> QAction:
         a = QAction(label, menu, checkable=True, checked=bool(getattr(self.settings, field)))
