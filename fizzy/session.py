@@ -88,8 +88,12 @@ class Session(QObject):
                            on_error=self._report)
 
     def start_listening(self) -> None:
-        """Hotkey down (or wake word): start recording a spoken question."""
+        """Hotkey down (or wake word): start recording a spoken question.
+
+        Pressed again while a tapped question is still recording, it ends the
+        recording, for people who'd rather not wait for the pause."""
         if self.state == "listening":
+            self._utterance_over.set()
             return
         self.stop_speaking()            # talking over Fizzy interrupts it
         self._pressed_at = time.monotonic()
