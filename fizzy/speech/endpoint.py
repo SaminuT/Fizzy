@@ -1,7 +1,10 @@
 """Decide when the user has finished speaking, from the mic level alone.
 
-The threshold adapts to the room: it tracks the background noise floor
-while the user is quiet, and treats anything clearly above it as speech.
+The threshold adapts to the room. The first few frames, before anyone
+starts talking, give a first guess at the background noise; after that the
+estimate follows quiet moments quickly and creeps up slowly under steady
+noise (a fan, traffic), so constant noise is never mistaken for an endless
+sentence.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ class EndpointConfig:
     no_speech_s: float = 6.0        # nothing said at all = give up
     max_s: float = 60.0             # hard cap
     min_speech_s: float = 0.15      # shorter bursts are clicks, not words
+    calibrate_s: float = 0.12       # frames used for the first noise guess
 
 
 class Endpointer:
@@ -27,6 +31,7 @@ class Endpointer:
         self.speech_s = 0.0
         self.quiet_s = 0.0
         self.reason = ""
+        self._calibration: list[float] = []
 
     @property
     def heard_speech(self) -> bool:
@@ -38,13 +43,16 @@ class Endpointer:
     def feed(self, level: float, dt: float) -> bool:
         """Add one frame's level. True once the utterance is over."""
         self.elapsed += dt
+        if self.elapsed <= self.cfg.calibrate_s:
+            self._calibration.append(level)
+            self.noise = max(self.noise, min(0.05, sum(self._calibration) / len(self._calibration)))
+            return False
+        self._track_noise(level)
         if level > self.threshold():
             self.speech_s += dt
             self.quiet_s = 0.0
         else:
             self.quiet_s += dt
-            # Learn the noise floor only from quiet frames, slowly.
-            self.noise = 0.95 * self.noise + 0.05 * level
 
         if self.elapsed >= self.cfg.max_s:
             self.reason = "max"
@@ -56,3 +64,9 @@ class Endpointer:
             self.reason = "no-speech"
             return True
         return False
+
+    def _track_noise(self, level: float) -> None:
+        if level < self.noise:
+            self.noise += (level - self.noise) * 0.1        # quiet: follow down quickly
+        else:
+            self.noise += (level - self.noise) * 0.004      # loud: rise slowly (speech is brief, noise isn't)
