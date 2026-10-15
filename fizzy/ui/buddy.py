@@ -169,7 +169,10 @@ class Buddy(QObject):
                 self._returning = False
         elif self._target is None:
             goal = QPointF(QCursor.pos()) + OFFSET
-            self.pos += (goal - self.pos) * FOLLOW_EASE
+            step = goal - self.pos
+            if self.state == "idle" and abs(step.x()) < 0.3 and abs(step.y()) < 0.3:
+                return      # resting: nothing moves, so don't repaint 60 times a second
+            self.pos += step * FOLLOW_EASE
         self._repaint()
 
     def _bounds(self) -> QRectF:
@@ -203,8 +206,6 @@ class Buddy(QObject):
         radius = ORB_RADIUS
         if self.state == "speaking":
             radius *= 1.0 + 0.12 * abs(math.sin(now * 9))
-        elif self.state == "idle":
-            radius *= 1.0 + 0.04 * math.sin(now * 2)
 
         if self.state == "listening":
             ring = (now * 1.4) % 1.0
