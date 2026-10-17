@@ -46,6 +46,7 @@ SIGN_IN_TIMEOUT_S = 300
 REFRESH_MARGIN_S = 120
 
 SECRET_NAME = "chatgpt_session"
+HOST_ID_PREFIX = "urn:uuid:"          # OpenAI rejects a host id that isn't a UUID URN
 TERMINAL_REFRESH_ERRORS = {
     "invalid_grant", "invalid_refresh_token", "token_expired", "refresh_token_expired",
     "refresh_token_invalidated", "refresh_token_reused",
@@ -60,9 +61,20 @@ class SignInNeeded(SignInError):
     """The saved sign-in can't be used any more; the user has to sign in again."""
 
 
+def new_host_id() -> str:
+    return f"{HOST_ID_PREFIX}{uuid.uuid4()}"
+
+
+def normalise_host_id(value: str) -> str:
+    """Older Fizzy builds saved a bare UUID; keep the same id, in the accepted form."""
+    if not value:
+        return new_host_id()
+    return value if value.startswith(HOST_ID_PREFIX) else f"{HOST_ID_PREFIX}{value}"
+
+
 @dataclass
 class ChatGPTSession:
-    ext_agent_host_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    ext_agent_host_id: str = field(default_factory=new_host_id)
     client_id: str = ""             # issued at first registration, kept for reauthorisation
     email: str = ""
     subject: str = ""
@@ -89,7 +101,9 @@ class ChatGPTSession:
 def load() -> ChatGPTSession:
     raw = get_json_secret(SECRET_NAME) or {}
     known = ChatGPTSession.__dataclass_fields__
-    return ChatGPTSession(**{k: v for k, v in raw.items() if k in known})
+    sess = ChatGPTSession(**{k: v for k, v in raw.items() if k in known})
+    sess.ext_agent_host_id = normalise_host_id(sess.ext_agent_host_id)
+    return sess
 
 
 def save(s: ChatGPTSession) -> None:

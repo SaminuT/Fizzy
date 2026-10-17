@@ -27,6 +27,16 @@ def test_first_sign_in_registers():
     assert "id_token_hint" not in q
 
 
+def test_host_id_is_a_uuid_urn():
+    assert auth.ChatGPTSession().ext_agent_host_id.startswith("urn:uuid:")
+
+
+def test_old_bare_host_id_is_upgraded_in_place():
+    from fizzy.settings import set_json_secret
+    set_json_secret(auth.SECRET_NAME, {"ext_agent_host_id": "cc31f5b0-f926-4d2a-9d86-da1429f304d1"})
+    assert auth.load().ext_agent_host_id == "urn:uuid:cc31f5b0-f926-4d2a-9d86-da1429f304d1"
+
+
 def test_reauthorisation_reuses_registration():
     s = auth.ChatGPTSession(client_id="oaiapp_1", id_token="tok", email="a@b.c")
     q = parse_qs(urlparse(auth.authorize_url(s, "http://127.0.0.1:1/auth/callback", "st", "no", "ch")).query)
