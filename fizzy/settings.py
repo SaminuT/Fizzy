@@ -38,6 +38,7 @@ class Settings:
     models: dict = field(default_factory=dict)
 
     hotkey: str = "ctrl+alt+space"
+    panel_hotkey: str = "ctrl+alt+t"    # show / hide the panel with the typing box
     hold_threshold_s: float = 0.5   # held longer than this = hold-to-talk
 
     screen_context: str = CONTEXT_SELECTION_OR_SCREEN

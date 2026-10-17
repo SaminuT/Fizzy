@@ -42,7 +42,13 @@ pip install -r requirements.txt
 python -m fizzy
 ```
 
-Fizzy starts in the system tray. The default hotkey is **Ctrl + Alt + Space**. Press **Esc** to stop an answer.
+Fizzy starts in the system tray. Hotkeys:
+
+- **Ctrl + Alt + Space**: talk (hold it, or tap and speak).
+- **Ctrl + Alt + T**: show or hide the panel, ready to type. Text you've highlighted in your app comes along.
+- **Esc**: stop an answer, or close the panel when it's idle.
+
+Both hotkeys can be changed under **Tray → Voice and microphone**.
 
 The first voice question downloads a small Whisper model. The first pointing question can take a few extra seconds while the text-recognition model loads.
 

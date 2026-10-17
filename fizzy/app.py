@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 from PyQt6.QtCore import QObject, QPointF, QTimer, pyqtSignal
@@ -12,10 +13,11 @@ from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox
 from fizzy import APP_NAME, __version__, logs, single_instance
 from fizzy.ai import registry
 from fizzy.ai.base import Provider
+from fizzy.context import privacy, selection as selection_reader, window
 from fizzy.context.screen import ScreenLayout
 from fizzy.context.selection_watch import SelectionWatcher
 from fizzy.context.tracker import ForegroundTracker
-from fizzy.hotkey import Hotkey
+from fizzy.hotkey import Hotkey, ToggleHotkey
 from fizzy.runtime import AsyncRunner
 from fizzy.session import Session
 from fizzy.speech.mic import Microphone
@@ -32,6 +34,7 @@ from fizzy.ui.tray import Tray
 log = logging.getLogger("fizzy")
 
 HOTKEYS = ["ctrl+alt+space", "ctrl+shift+space", "alt+shift+f", "ctrl+windows"]
+PANEL_HOTKEYS = ["ctrl+alt+t", "ctrl+alt+f", "ctrl+shift+f", "alt+shift+t"]
 VOICES = [
     ("", "Default (Ava, multilingual)"),
     ("en-US-AndrewMultilingualNeural", "Andrew (multilingual)"),
@@ -71,6 +74,7 @@ class FizzyApp:
         self.mic = Microphone(self.settings.mic_device)
         self.session = Session(self.settings, self.runner, provider, self.tracker, self.mic)
         self.hotkey = Hotkey(self.settings.hotkey)
+        self.panel_hotkey = ToggleHotkey(self.settings.panel_hotkey, before=self._grab_selection_now)
         self.wake: WakeListener | None = None
 
         self.panel = Panel()
@@ -101,6 +105,7 @@ class FizzyApp:
         self.hotkey.released.connect(s.stop_listening)
         self.hotkey.escape.connect(lambda: s.cancel() if s.state != "idle" else None)
         self.tray.show_panel.connect(p.focus_input)
+        self.panel_hotkey.pressed.connect(p.toggle)
         self.tray.quit_requested.connect(self.quit)
         self.bridge.models_ready.connect(self._on_models_ready)
         self.bridge.signed_in.connect(self._on_signed_in)
@@ -269,6 +274,8 @@ class FizzyApp:
               self.settings.mic_device, self._set_mic)
         radio(menu.addMenu("Talk hotkey"), [(h, h.replace("windows", "win").title()) for h in HOTKEYS],
               self.settings.hotkey, self._set_hotkey)
+        radio(menu.addMenu("Show/hide panel hotkey"), [(h, h.title()) for h in PANEL_HOTKEYS],
+              self.settings.panel_hotkey, self._set_panel_hotkey)
         radio(menu.addMenu("Voice (free Edge voices)"), VOICES, self.settings.voice, self._set_voice)
         radio(menu.addMenu("Speech-to-text"), STT_CHOICES, self.settings.stt,
               lambda v: self._set_speech("stt", v))
@@ -306,6 +313,28 @@ class FizzyApp:
             return
         self.settings.hotkey = combo
         self.settings.save()
+
+    def _set_panel_hotkey(self, combo: str) -> None:
+        try:
+            self.panel_hotkey.change(combo)
+        except Exception as e:
+            log.exception("panel hotkey change failed")
+            self.panel.show_error(f"Couldn't use {combo}: {e}")
+            self.panel_hotkey.change(self.settings.panel_hotkey)
+            return
+        self.settings.panel_hotkey = combo
+        self.settings.save()
+
+    def _grab_selection_now(self) -> None:
+        """Runs (off the keyboard hook) as the panel hotkey goes down."""
+        if self.settings.screen_context == CONTEXT_SCREEN:
+            return
+        win = window.foreground()
+        if not win.hwnd or win.pid == os.getpid():
+            return      # Fizzy is in front: closing the panel, nothing to read
+        if self.settings.privacy_guard and privacy.is_sensitive(win):
+            return
+        self.selection.offer(selection_reader.clean(selection_reader.read_uia()), win.hwnd)
 
     def _set_voice(self, voice: str) -> None:
         self.settings.voice = voice
@@ -382,6 +411,10 @@ class FizzyApp:
         self.tracker.start()
         self.selection.start(self.settings.screen_context != CONTEXT_SCREEN)
         try:
+            self.panel_hotkey.start()
+        except Exception:
+            log.exception("couldn't register the panel hotkey")
+        try:
             self.hotkey.start()
         except Exception:
             log.exception("couldn't register the hotkey")
@@ -406,6 +439,7 @@ class FizzyApp:
         self.buddy.stop()
         self._set_wake_word(False)
         self.hotkey.stop()
+        self.panel_hotkey.stop()
         self.mic.close()
         try:
             self.runner.run(self.session.provider.aclose(), timeout=3)

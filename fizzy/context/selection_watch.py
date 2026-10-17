@@ -69,6 +69,11 @@ class SelectionWatcher(QObject):
     def clear(self) -> None:
         self._set(None)
 
+    def offer(self, text: Optional[str], hwnd: int) -> None:
+        """Record a selection read elsewhere (e.g. at a hotkey press). Any thread."""
+        if self._enabled.is_set():
+            self._set(Selected(text, hwnd, time.monotonic()) if text else None)
+
     def _run(self) -> None:
         while not self._stop.is_set():
             self._enabled.wait()

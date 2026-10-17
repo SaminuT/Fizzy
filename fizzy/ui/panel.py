@@ -287,8 +287,23 @@ class Panel(QWidget):
 
     def focus_input(self) -> None:
         self.show_near_corner()
+        win32.bring_to_front(self)
         self.activateWindow()
         self.input.setFocus()
+        self.input.selectAll()
+
+    def toggle(self) -> None:
+        """Show the panel ready to type, or hide it if it's already in use."""
+        if self.isVisible() and self.isActiveWindow():
+            self.hide()
+        else:
+            self.focus_input()
+
+    def keyPressEvent(self, e) -> None:
+        if e.key() == Qt.Key.Key_Escape and self._state == "idle":
+            self.hide()         # Esc in an idle panel closes it
+        else:
+            super().keyPressEvent(e)
 
     # ── internals ───────────────────────────────────────────────────────
 

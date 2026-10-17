@@ -35,3 +35,29 @@ def no_activate(widget) -> None:
         user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, style | _WS_EX_NOACTIVATE)
     except AttributeError:
         pass
+
+
+def bring_to_front(widget) -> None:
+    """Make this window the foreground window, even when Fizzy isn't active.
+
+    Windows only lets the app the user is working in hand over focus. Briefly
+    joining that app's input queue makes the switch count as allowed.
+    """
+    try:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+    except AttributeError:
+        return
+    hwnd = int(widget.winId())
+    fg = user32.GetForegroundWindow()
+    if fg == hwnd:
+        return
+    fg_thread = user32.GetWindowThreadProcessId(fg, None)
+    me = kernel32.GetCurrentThreadId()
+    attached = bool(fg_thread and fg_thread != me and user32.AttachThreadInput(me, fg_thread, True))
+    try:
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+    finally:
+        if attached:
+            user32.AttachThreadInput(me, fg_thread, False)
