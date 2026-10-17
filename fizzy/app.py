@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 
-from PyQt6.QtCore import QObject, QPointF, pyqtSignal
+from PyQt6.QtCore import QObject, QPointF, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox
 
@@ -84,6 +84,7 @@ class FizzyApp:
         p.question_submitted.connect(lambda q: s.ask_text(q, p.selection_to_send() or None))
         self.selection.changed.connect(p.set_selection)
         p.stop_requested.connect(s.cancel)
+        p.speak_toggled.connect(self.set_speaking_mode)
         p.model_chosen.connect(self._on_model_chosen)
         s.state_changed.connect(p.set_state)
         s.state_changed.connect(self.buddy.set_state)
@@ -175,7 +176,9 @@ class FizzyApp:
         self._toggle(menu, 'Wake word ("Fizzy")', "wake_word", after=self._set_wake_word)
         self._toggle(menu, "Privacy guard", "privacy_guard")
         self._toggle(menu, "Show the buddy", "show_buddy", after=self.buddy.set_visible)
-        self._toggle(menu, "Read typed answers aloud", "speak_typed")
+        self._toggle(menu, "Speaking mode (read answers aloud)", "speak", after=self._on_speak_changed)
+        typed = self._toggle(menu, "    …also for typed questions", "speak_typed")
+        typed.setEnabled(self.settings.speak)
         menu.addSeparator()
         keys = QAction("Keys and sign-in…", menu)
         keys.triggered.connect(self.open_keys)
@@ -271,6 +274,19 @@ class FizzyApp:
               lambda v: self._set_speech("stt", v))
         radio(menu.addMenu("Whisper model size"), [(w, w) for w in WHISPER_SIZES], self.settings.whisper_model,
               lambda v: self._set_speech("whisper_model", v))
+
+    def set_speaking_mode(self, on: bool) -> None:
+        self.settings.speak = on
+        self.settings.save()
+        self._on_speak_changed(on)
+
+    def _on_speak_changed(self, on: bool) -> None:
+        if not on:
+            self.session.stop_speaking()
+        self.panel.set_speaking_mode(on)
+        # Rebuild after this click finishes: clearing the menu now would
+        # delete the very action whose signal we're handling.
+        QTimer.singleShot(0, self.tray.rebuild)
 
     def _set_mic(self, device) -> None:
         self.settings.mic_device = device
@@ -372,6 +388,7 @@ class FizzyApp:
             self.tray.notify(APP_NAME, f"Couldn't register the hotkey {self.settings.hotkey}. "
                                        "Typing in the panel still works.")
         self._show_provider(self.session.provider)
+        self.panel.set_speaking_mode(self.settings.speak)
         self.buddy.start()
         if self.settings.wake_word:
             self._set_wake_word(True)

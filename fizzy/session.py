@@ -277,7 +277,7 @@ class Session(QObject):
         self._remember(win.app_key, question, answer)
         self.answer_done.emit(answer)
         try:
-            if spoken:
+            if spoken and self.settings.speak:
                 await self._speak_answer(answer)
             elif self._pointed:
                 await asyncio.sleep(POINT_HOLD_S)
@@ -340,6 +340,11 @@ class Session(QObject):
         await self._say(f"Step {n}. {self._steps[self._step]}\n{tail}")
 
     async def _say(self, text: str) -> None:
+        if not self.settings.speak:
+            # Speaking mode is off: "repeat" and "next" show their text instead.
+            self._last_spoken = text
+            self.answer_done.emit(text)
+            return
         if self._speaker is None:
             self._speaker = tts.Speaker(tts.choose(self.settings))
         self._last_spoken = text

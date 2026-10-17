@@ -45,7 +45,8 @@ class Settings:
     clipboard_fallback: bool = True
     privacy_guard: bool = True
 
-    speak_typed: bool = True        # read answers to typed questions aloud too
+    speak: bool = True              # speaking mode: read answers aloud at all
+    speak_typed: bool = True        # …including answers to typed questions
     show_buddy: bool = True
     wake_word: bool = False
 

@@ -60,6 +60,7 @@ class Panel(QWidget):
     question_submitted = pyqtSignal(str)
     model_chosen = pyqtSignal(str)
     stop_requested = pyqtSignal()
+    speak_toggled = pyqtSignal(bool)
 
     WIDTH = 380
     HEIGHT = 420
@@ -95,6 +96,12 @@ class Panel(QWidget):
             "border-radius:9px; padding:1px 8px; font-size:11px;")
         header.addWidget(self.badge)
         header.addStretch()
+        self.speak_btn = QPushButton()
+        self.speak_btn.setCheckable(True)
+        self.speak_btn.setFixedSize(24, 24)
+        self.speak_btn.setStyleSheet(self._flat_button_css())
+        self.speak_btn.toggled.connect(self._on_speak_toggled)
+        header.addWidget(self.speak_btn)
         hide = QPushButton("✕")
         hide.setFixedSize(24, 24)
         hide.setToolTip("Hide (reopen from the tray)")
@@ -204,6 +211,21 @@ class Panel(QWidget):
                 i = 0
             self.models.setCurrentIndex(i)
         self.models.blockSignals(False)
+
+    def set_speaking_mode(self, on: bool) -> None:
+        self.speak_btn.blockSignals(True)
+        self.speak_btn.setChecked(on)
+        self.speak_btn.blockSignals(False)
+        self._show_speak(on)
+
+    def _on_speak_toggled(self, on: bool) -> None:
+        self._show_speak(on)
+        self.speak_toggled.emit(on)
+
+    def _show_speak(self, on: bool) -> None:
+        self.speak_btn.setText("🔊" if on else "🔇")
+        self.speak_btn.setToolTip("Speaking mode is on (click to mute)" if on
+                                  else "Speaking mode is off (click to hear answers)")
 
     def set_state(self, state: str) -> None:
         self._state = state
