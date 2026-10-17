@@ -35,26 +35,43 @@ class LocalWhisper(Transcriber):
     label = "Whisper (on this PC)"
     _models: dict = {}
     _load_lock = threading.Lock()
+    cpu_only = False        # set once the GPU has failed, for every instance
 
     def __init__(self, size: str = "base"):
         self.size = size
 
     @classmethod
-    def model(cls, size: str):
+    def model(cls, size: str, cpu: bool = False):
+        key = (size, cpu)
         with cls._load_lock:
-            if size not in cls._models:
+            if key not in cls._models:
                 from faster_whisper import WhisperModel
-                log.info("loading Whisper '%s' (first use downloads it)", size)
+                log.info("loading Whisper '%s' on %s (first use downloads it)", size, "CPU" if cpu else "best device")
                 try:
-                    cls._models[size] = WhisperModel(size, device="auto", compute_type="int8")
+                    cls._models[key] = WhisperModel(size, device="cpu" if cpu else "auto", compute_type="int8")
                 except Exception:
+                    if cpu:
+                        raise
                     log.info("GPU Whisper unavailable; using the CPU")
-                    cls._models[size] = WhisperModel(size, device="cpu", compute_type="int8")
-            return cls._models[size]
+                    cls._models[key] = WhisperModel(size, device="cpu", compute_type="int8")
+            return cls._models[key]
 
     def _run(self, pcm: bytes, prompt: str = NAME_HINT) -> str:
         audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-        segments, _info = self.model(self.size).transcribe(
+        try:
+            return self._transcribe(self.model(self.size, cpu=self.cpu_only), audio, prompt)
+        except RuntimeError as e:
+            # A GPU can be detected while NVIDIA's CUDA libraries (cuBLAS, cuDNN)
+            # aren't installed; that only fails here, on first use.
+            if self.cpu_only or not any(k in str(e).lower() for k in ("cuda", "cublas", "cudnn")):
+                raise
+            log.warning("GPU Whisper failed (%s); switching to the CPU", e)
+            LocalWhisper.cpu_only = True
+            return self._transcribe(self.model(self.size, cpu=True), audio, prompt)
+
+    @staticmethod
+    def _transcribe(model, audio, prompt: str) -> str:
+        segments, _info = model.transcribe(
             audio, beam_size=1, vad_filter=True, initial_prompt=prompt, condition_on_previous_text=False,
         )
         return " ".join(s.text.strip() for s in segments).strip()
