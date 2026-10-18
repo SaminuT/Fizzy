@@ -35,6 +35,16 @@ python -m fizzy
 
 Settings live in the tray menu and `%LOCALAPPDATA%\Fizzy\settings.json`. Override any one with `FIZZY_<SETTING>`.
 
+## Sign in with ChatGPT
+
+Use your ChatGPT plan instead of an API key.
+
+1. **Tray → Keys and sign-in… → ChatGPT → Sign in**
+2. Approve in the browser window that opens
+3. **Tray → AI → ChatGPT**
+
+The token is stored in Windows Credential Manager and refreshes on its own. Sign out from the same dialog.
+
 ## Install
 
 Download `Fizzy-Setup-<version>.exe` from [Releases](https://github.com/Owask/Fizzy/releases). No admin rights needed.
@@ -51,7 +61,7 @@ python -m pytest
 powershell -ExecutionPolicy Bypass -File packaging\build.ps1
 ```
 
-Builds `dist\Fizzy-Setup-<version>.exe` (needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)). To publish, bump `__version__` in `fizzy/__init__.py` and push a matching tag (`v1.0.1`). GitHub Actions builds and attaches the installer to a release.
+Builds `dist\Fizzy-Setup-<version>.exe` (needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)). To publish, bump `__version__` in `fizzy/__init__.py` and push a matching tag (`v2.0.1`). GitHub Actions builds and attaches the installer to a release.
 
 ## License
 
