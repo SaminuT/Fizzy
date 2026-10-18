@@ -4,7 +4,8 @@ version = "1.0.0"
 description = "An AI helper that sits beside your cursor on Windows."
 readme = "README.md"
 requires-python = ">=3.11"
-authors = [{ name = "Owask Pvt Ltd" }]
+authors = [{ name = "SaminuT", email = "saminuhansaja.w@gmail.com" }]
+license = { text = "MIT" }
 dynamic = ["dependencies"]
 
 [project.scripts]
