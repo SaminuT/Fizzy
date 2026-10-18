@@ -1,7 +1,7 @@
-"""The buddy: a small Fizzy orb that rides beside the pointer.
+"""The buddy: a small dot that rides beside the pointer.
 
 There's one transparent, click-through overlay window per monitor. The
-Buddy controller owns the orb's position (global logical pixels), animates
+Buddy controller owns the dot's position (global logical pixels), animates
 it, and asks only the overlay under it to repaint the area that changed.
 """
 
@@ -13,13 +13,13 @@ from dataclasses import dataclass
 from typing import Optional
 
 from PyQt6.QtCore import QObject, QPointF, QRect, QRectF, Qt, QTimer
-from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetricsF, QGuiApplication, QPainter, QPainterPath, QPen
+from PyQt6.QtGui import QCursor, QFont, QFontMetricsF, QGuiApplication, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QWidget
 
 from fizzy.ui import theme, win32
 
-ORB_RADIUS = 9.0
-OFFSET = QPointF(24, 22)        # orb sits below-right of the pointer tip
+DOT_RADIUS = 5.0
+OFFSET = QPointF(18, 18)        # dot sits below-right of the pointer tip
 FPS = 60
 FOLLOW_EASE = 0.32
 
@@ -42,11 +42,10 @@ class _Flight:
 
 
 def _arc(start: QPointF, end: QPointF) -> tuple[QPointF, float]:
-    """Control point for a gentle upward arc, and a duration that grows with distance."""
+    """Control point for a straight glide, and a duration that grows with distance."""
     mid = (start + end) / 2
     d = math.hypot(end.x() - start.x(), end.y() - start.y())
-    lift = min(140.0, d * 0.25)
-    return QPointF(mid.x(), mid.y() - lift), max(0.35, min(0.95, d / 1400))
+    return mid, max(0.25, min(0.6, d / 2000))
 
 
 class Overlay(QWidget):
@@ -84,7 +83,6 @@ class Buddy(QObject):
         self._flight: Optional[_Flight] = None
         self._target: Optional[QPointF] = None      # what we're pointing at
         self._label = ""
-        self._dwell_since = 0.0
         self._returning = False
         self._last_rect = QRectF()
         self._overlays: list[Overlay] = []
@@ -126,13 +124,14 @@ class Buddy(QObject):
 
     def set_state(self, state: str) -> None:
         self.state = state
+        self._repaint()
 
     def point_at(self, target: QPointF, label: str = "") -> None:
         """Glide over to a spot (global logical px) and stay there until release()."""
         self._target = QPointF(target)
         self._label = label
         self._returning = False
-        end = self._target + QPointF(14, 14)
+        end = self._target + QPointF(12, 12)
         control, duration = _arc(self.pos, end)
         self._flight = _Flight(QPointF(self.pos), control, end, time.monotonic(), duration)
 
@@ -164,23 +163,21 @@ class Buddy(QObject):
             self.pos, done = self._flight.at(now)
             if done:
                 self._flight = None
-                if self._target is not None:
-                    self._dwell_since = now
                 self._returning = False
         elif self._target is None:
             goal = QPointF(QCursor.pos()) + OFFSET
             step = goal - self.pos
-            if self.state == "idle" and abs(step.x()) < 0.3 and abs(step.y()) < 0.3:
+            if abs(step.x()) < 0.3 and abs(step.y()) < 0.3:
                 return      # resting: nothing moves, so don't repaint 60 times a second
             self.pos += step * FOLLOW_EASE
         self._repaint()
 
     def _bounds(self) -> QRectF:
-        r = ORB_RADIUS * 3.2
+        r = DOT_RADIUS * 2
         rect = QRectF(self.pos.x() - r, self.pos.y() - r, 2 * r, 2 * r)
         if self._target is not None:
             t = self._target
-            rect = rect.united(QRectF(t.x() - 40, t.y() - 40, 80, 80))
+            rect = rect.united(QRectF(t.x() - 16, t.y() - 16, 32, 32))
             if self._label:
                 rect = rect.united(self._label_rect())
         return rect.adjusted(-4, -4, 4, 4)
@@ -198,51 +195,24 @@ class Buddy(QObject):
     # ── drawing ─────────────────────────────────────────────────────────
 
     def paint(self, p: QPainter) -> None:
-        now = time.monotonic()
-        accent = theme.STATE_COLOURS.get(self.state, theme.VIOLET)
         if self._target is not None and self._flight is None:
-            self._paint_target(p, now, accent)
-
-        radius = ORB_RADIUS
-        if self.state == "speaking":
-            radius *= 1.0 + 0.12 * abs(math.sin(now * 9))
-
+            self._paint_target(p)
         if self.state == "listening":
-            ring = (now * 1.4) % 1.0
-            c = QColor(accent)
-            c.setAlphaF(0.6 * (1 - ring))
-            p.setPen(QPen(c, 2))
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawEllipse(self.pos, radius + 4 + ring * 12, radius + 4 + ring * 12)
+            theme.paint_dot(p, self.pos, DOT_RADIUS, theme.RED)
+        elif self.state == "thinking":
+            theme.paint_dot(p, self.pos, DOT_RADIUS, None)
+        else:
+            theme.paint_dot(p, self.pos, DOT_RADIUS)
 
-        theme.paint_orb(p, self.pos, radius, accent if self.state != "idle" else None)
-
-        if self.state == "thinking":
-            p.setPen(Qt.PenStyle.NoPen)
-            for i in range(3):
-                a = now * 4 + i * (2 * math.pi / 3)
-                dot = self.pos + QPointF(math.cos(a), math.sin(a)) * (radius + 7)
-                p.setBrush(QColor(255, 255, 255, 220))
-                p.drawEllipse(dot, 2.2, 2.2)
-
-    def _paint_target(self, p: QPainter, now: float, accent: QColor) -> None:
+    def _paint_target(self, p: QPainter) -> None:
         t = self._target
-        pulse = (now - self._dwell_since) * 1.6 % 1.0
-        c = QColor(accent)
-        c.setAlphaF(0.85 * (1 - pulse))
-        p.setPen(QPen(c, 3))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawEllipse(t, 10 + pulse * 22, 10 + pulse * 22)
-        p.setPen(QPen(QColor(accent), 2))
-        p.drawEllipse(t, 9, 9)
-        # A short stroke from the orb to the spot it's pointing at.
-        p.drawLine(self.pos + QPointF(-ORB_RADIUS * 0.6, -ORB_RADIUS * 0.6), t + QPointF(6, 6))
+        theme.paint_dot(p, t, 10, None)
         if self._label:
             r = self._label_rect()
             path = QPainterPath()
-            path.addRoundedRect(r, 9, 9)
+            path.addRoundedRect(r, 4, 4)
             p.fillPath(path, theme.BG)
-            p.setPen(QPen(accent, 1.2))
+            p.setPen(QPen(theme.BORDER, 1))
             p.drawPath(path)
             p.setPen(theme.TEXT)
             p.setFont(self._font())
@@ -250,15 +220,13 @@ class Buddy(QObject):
 
     @staticmethod
     def _font() -> QFont:
-        f = QFont("Segoe UI", 10)
-        f.setWeight(QFont.Weight.DemiBold)
-        return f
+        return QFont("Segoe UI", 10)
 
     def _label_rect(self) -> QRectF:
         fm = QFontMetricsF(self._font())
         w = min(320.0, fm.horizontalAdvance(self._label) + 22)
         h = fm.height() + 10
         t = self._target
-        above = t.y() - 34 - h
-        top = above if above > 8 else t.y() + 34       # flip below near the top edge
+        above = t.y() - 18 - h
+        top = above if above > 8 else t.y() + 18       # flip below near the top edge
         return QRectF(t.x() - w / 2, top, w, h)

@@ -4,6 +4,8 @@ An AI helper that sits beside your cursor on Windows.
 
 Ask by voice or text. Fizzy looks at your screen (or the text you highlighted), answers out loud, and points at what you asked about.
 
+![Fizzy pointing at the Export button](docs/screenshot.png)
+
 ## Features
 
 - Voice, typing, or an optional "Fizzy" wake word

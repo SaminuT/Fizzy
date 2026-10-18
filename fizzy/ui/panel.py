@@ -21,11 +21,11 @@ STATE_TEXT = {
 
 
 class LevelMeter(QWidget):
-    """Five little bars that bounce with the mic level."""
+    """A thin bar that follows the mic level."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(46, 14)
+        self.setFixedSize(60, 3)
         self._level = 0.0
         self._decay = QTimer(self, interval=50)
         self._decay.timeout.connect(self._fade)
@@ -45,15 +45,8 @@ class LevelMeter(QWidget):
 
     def paintEvent(self, _e) -> None:
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(theme.CORAL)
-        shape = (0.5, 0.8, 1.0, 0.8, 0.5)
-        w = 6
-        for i, k in enumerate(shape):
-            h = max(2.0, self.height() * self._level * k)
-            x = i * (w + 4)
-            p.drawRoundedRect(QRectF(x, (self.height() - h) / 2, w, h), 2, 2)
+        p.fillRect(self.rect(), theme.BORDER)
+        p.fillRect(QRectF(0, 0, self.width() * self._level, self.height()), theme.TEXT_DIM)
 
 
 class Panel(QWidget):
@@ -82,73 +75,58 @@ class Panel(QWidget):
     # ── layout ──────────────────────────────────────────────────────────
 
     def _build(self) -> None:
+        self.setStyleSheet(
+            f"QLabel {{ color:{css(theme.TEXT_DIM)}; font-size:12px; }}"
+            f"QPushButton {{ background:transparent; color:{css(theme.TEXT_DIM)}; border:none; font-size:12px; padding:2px 4px; }}"
+            f"QPushButton:hover {{ color:{css(theme.TEXT)}; }}"
+            f"QLineEdit, QComboBox {{ background:{css(theme.SURFACE)}; color:{css(theme.TEXT)};"
+            f" border:1px solid {css(theme.BORDER)}; border-radius:4px; padding:6px 8px; font-size:13px; }}"
+            f"QLineEdit:focus {{ border-color:{css(theme.TEXT_DIM)}; }}"
+            "QComboBox { padding:2px 6px; font-size:12px; }"
+            f"QTextBrowser {{ background:transparent; border:none; color:{css(theme.TEXT)}; font-size:13px; }}")
+
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 14, 16, 14)
-        root.setSpacing(10)
+        root.setContentsMargins(14, 10, 10, 12)
+        root.setSpacing(8)
 
         header = QHBoxLayout()
-        title = QLabel(APP_NAME)
-        title.setStyleSheet(f"color:{css(theme.TEXT)}; font-size:16px; font-weight:600;")
-        header.addWidget(title)
-        self.badge = QLabel("")
-        self.badge.setStyleSheet(
-            f"color:{css(theme.TEXT)}; background:{css(theme.SURFACE)}; border:1px solid {css(theme.BORDER)};"
-            "border-radius:9px; padding:1px 8px; font-size:11px;")
-        header.addWidget(self.badge)
+        header.setSpacing(8)
+        self.status = QLabel("")
+        header.addWidget(self.status)
+        self.meter = LevelMeter()
+        self.meter.hide()
+        header.addWidget(self.meter, alignment=Qt.AlignmentFlag.AlignVCenter)
         header.addStretch()
         self.speak_btn = QPushButton()
         self.speak_btn.setCheckable(True)
-        self.speak_btn.setFixedSize(24, 24)
-        self.speak_btn.setStyleSheet(self._flat_button_css())
         self.speak_btn.toggled.connect(self._on_speak_toggled)
         header.addWidget(self.speak_btn)
-        hide = QPushButton("✕")
-        hide.setFixedSize(24, 24)
+        hide = QPushButton("×")
         hide.setToolTip("Hide (reopen from the tray)")
-        hide.setStyleSheet(self._flat_button_css())
+        hide.setStyleSheet("font-size:16px;")
         hide.clicked.connect(self.hide)
         header.addWidget(hide)
         root.addLayout(header)
 
-        status = QHBoxLayout()
-        status.setSpacing(6)
-        self.dot = QLabel("●")
-        self.status = QLabel("")
-        self.status.setStyleSheet(f"color:{css(theme.TEXT_DIM)}; font-size:12px;")
-        status.addWidget(self.dot)
-        status.addWidget(self.status)
-        self.meter = LevelMeter()
-        self.meter.hide()
-        status.addWidget(self.meter)
-        status.addStretch()
-        self.status_row = status
-        root.addLayout(status)
-
         self.answer = QTextBrowser()
         self.answer.setOpenExternalLinks(True)
-        self.answer.setStyleSheet(
-            f"QTextBrowser {{ background:transparent; border:none; color:{css(theme.TEXT)}; font-size:13px; }}")
-        self.answer.setPlaceholderText("Ask me anything about what's on your screen.")
+        self.answer.setPlaceholderText("Ask about anything on your screen.")
         root.addWidget(self.answer, stretch=1)
 
         self.extra_rows = QVBoxLayout()
         self.extra_rows.setSpacing(6)
         root.addLayout(self.extra_rows)
 
-        # "Using the highlighted text" chip, shown while a selection is on offer.
+        # "Using highlighted text" line, shown while a selection is on offer.
         self.chip = QWidget()
         chip = QHBoxLayout(self.chip)
-        chip.setContentsMargins(10, 4, 4, 4)
+        chip.setContentsMargins(0, 0, 0, 0)
         self.chip_label = QLabel("")
-        self.chip_label.setStyleSheet(f"color:{css(theme.TEXT)}; font-size:11px;")
         chip.addWidget(self.chip_label, stretch=1)
-        drop = QPushButton("✕")
-        drop.setFixedSize(20, 20)
+        drop = QPushButton("×")
         drop.setToolTip("Don't send the highlighted text")
-        drop.setStyleSheet(self._flat_button_css())
         drop.clicked.connect(self._drop_selection)
         chip.addWidget(drop)
-        self.chip.setStyleSheet(f"background:{css(theme.SURFACE)}; border-radius:9px;")
         self.chip.hide()
         self.extra_rows.addWidget(self.chip)
         self._selection = ""
@@ -157,41 +135,22 @@ class Panel(QWidget):
         ask = QHBoxLayout()
         ask.setSpacing(6)
         self.input = QLineEdit()
-        self.input.setPlaceholderText("Type a question, or hold the hotkey and talk")
-        self.input.setStyleSheet(
-            f"QLineEdit {{ background:{css(theme.SURFACE)}; color:{css(theme.TEXT)};"
-            f" border:1px solid {css(theme.BORDER)}; border-radius:10px; padding:7px 10px; font-size:13px; }}"
-            f"QLineEdit:focus {{ border-color:{css(theme.VIOLET)}; }}")
+        self.input.setPlaceholderText("Ask something")
         self.input.returnPressed.connect(self._submit)
         ask.addWidget(self.input, stretch=1)
-        self.send = QPushButton("➤")
-        self.send.setFixedSize(34, 34)
-        self.send.setToolTip("Send")
-        self.send.setStyleSheet(
-            f"QPushButton {{ background:{css(theme.VIOLET)}; color:white; border:none; border-radius:10px; font-size:14px; }}"
-            f"QPushButton:hover {{ background:{css(theme.VIOLET.lighter(115))}; }}"
-            "QPushButton:disabled { background:rgba(124,92,255,90); }")
+        self.send = QPushButton("Send")
         self.send.clicked.connect(self._on_send_clicked)
         ask.addWidget(self.send)
         root.addLayout(ask)
 
         footer = QHBoxLayout()
-        lbl = QLabel("Model")
-        lbl.setStyleSheet(f"color:{css(theme.TEXT_DIM)}; font-size:11px;")
-        footer.addWidget(lbl)
+        footer.setSpacing(6)
+        self.badge = QLabel("")
+        footer.addWidget(self.badge)
         self.models = QComboBox()
-        self.models.setStyleSheet(
-            f"QComboBox {{ background:{css(theme.SURFACE)}; color:{css(theme.TEXT)}; border:1px solid {css(theme.BORDER)};"
-            " border-radius:6px; padding:2px 6px; font-size:11px; }")
         self.models.activated.connect(lambda _i: self.model_chosen.emit(self.models.currentData() or ""))
         footer.addWidget(self.models, stretch=1)
         root.addLayout(footer)
-
-    @staticmethod
-    def _flat_button_css() -> str:
-        return (f"QPushButton {{ background:{css(theme.SURFACE)}; color:{css(theme.TEXT_DIM)}; border:none;"
-                " border-radius:12px; font-size:11px; }"
-                f"QPushButton:hover {{ color:{css(theme.TEXT)}; }}")
 
     # ── public API ──────────────────────────────────────────────────────
 
@@ -223,19 +182,16 @@ class Panel(QWidget):
         self.speak_toggled.emit(on)
 
     def _show_speak(self, on: bool) -> None:
-        self.speak_btn.setText("🔊" if on else "🔇")
+        self.speak_btn.setText("Sound on" if on else "Muted")
         self.speak_btn.setToolTip("Speaking mode is on (click to mute)" if on
                                   else "Speaking mode is off (click to hear answers)")
 
     def set_state(self, state: str) -> None:
         self._state = state
-        colour = theme.STATE_COLOURS.get(state, theme.VIOLET)
-        self.dot.setStyleSheet(f"color:{css(colour)}; font-size:10px;")
         self.status.setText(STATE_TEXT.get(state, state))
         self.meter.setVisible(state == "listening")
         busy = state in ("thinking", "speaking")
-        self.send.setText("■" if busy else "➤")
-        self.send.setToolTip("Stop" if busy else "Send")
+        self.send.setText("Stop" if busy else "Send")
 
     def set_selection(self, text: str) -> None:
         """Offer (or withdraw) the highlighted text from the user's app."""
@@ -276,7 +232,7 @@ class Panel(QWidget):
         self._render_answer()
 
     def show_error(self, message: str) -> None:
-        self.answer.setHtml(f"<p style='color:{css(theme.CORAL)}'>{_escape(message)}</p>")
+        self.answer.setHtml(f"<p style='color:{css(theme.RED)}'>{_escape(message)}</p>")
 
     def show_near_corner(self) -> None:
         screen = QGuiApplication.primaryScreen().availableGeometry()
@@ -335,13 +291,13 @@ class Panel(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         path = QPainterPath()
-        path.addRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 16, 16)
+        path.addRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8)
         p.fillPath(path, theme.BG)
         p.setPen(QPen(theme.BORDER, 1))
         p.drawPath(path)
 
     def mousePressEvent(self, e) -> None:
-        if e.button() == Qt.MouseButton.LeftButton and e.position().y() < 44:
+        if e.button() == Qt.MouseButton.LeftButton and e.position().y() < 36:
             self._drag_from = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
 
     def mouseMoveEvent(self, e) -> None:

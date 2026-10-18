@@ -1,4 +1,4 @@
-"""Render Fizzy's orb to a multi-size .ico for the exe and installer.
+"""Render Fizzy's dot to a multi-size .ico for the exe and installer.
 
 Usage: python packaging/make_icon.py build/fizzy.ico
 """
@@ -10,10 +10,10 @@ import sys
 from pathlib import Path
 
 from PIL import Image
-from PyQt6.QtCore import QBuffer, QIODevice, QPointF, Qt
+from PyQt6.QtCore import QBuffer, QIODevice, Qt
 from PyQt6.QtGui import QGuiApplication, QImage, QPainter
 
-from fizzy.ui.theme import paint_orb
+from fizzy.ui.theme import paint_icon
 
 SIZES = [(16, 16), (20, 20), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 
@@ -22,8 +22,7 @@ def render(size: int) -> Image.Image:
     img = QImage(size, size, QImage.Format.Format_ARGB32)
     img.fill(Qt.GlobalColor.transparent)
     p = QPainter(img)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    paint_orb(p, QPointF(size / 2, size / 2), size / 2 - max(1.0, size / 32))
+    paint_icon(p, size)
     p.end()
 
     buf = QBuffer()
