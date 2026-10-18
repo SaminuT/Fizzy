@@ -55,14 +55,6 @@ Download `Fizzy-Setup-<version>.exe` from [Releases](https://github.com/Owask/Fi
 python -m pytest
 ```
 
-## Build and release
-
-```powershell
-powershell -ExecutionPolicy Bypass -File packaging\build.ps1
-```
-
-Builds `dist\Fizzy-Setup-<version>.exe` (needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)). To publish, bump `__version__` in `fizzy/__init__.py` and push a matching tag (`v2.0.1`). GitHub Actions builds and attaches the installer to a release.
-
 ## License
 
 [MIT](LICENSE)
