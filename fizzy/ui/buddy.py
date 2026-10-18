@@ -197,16 +197,9 @@ class Buddy(QObject):
     def paint(self, p: QPainter) -> None:
         if self._target is not None and self._flight is None:
             self._paint_target(p)
-        if self.state == "listening":
-            theme.paint_dot(p, self.pos, DOT_RADIUS, theme.RED)
-        elif self.state == "thinking":
-            theme.paint_dot(p, self.pos, DOT_RADIUS, None)
-        else:
-            theme.paint_dot(p, self.pos, DOT_RADIUS)
+        theme.paint_dot(p, self.pos, DOT_RADIUS, theme.RED if self.state == "listening" else theme.DOT)
 
     def _paint_target(self, p: QPainter) -> None:
-        t = self._target
-        theme.paint_dot(p, t, 10, None)
         if self._label:
             r = self._label_rect()
             path = QPainterPath()

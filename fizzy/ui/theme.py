@@ -11,8 +11,8 @@ SURFACE = QColor(42, 42, 42)
 BORDER = QColor(58, 58, 58)
 TEXT = QColor(230, 230, 230)
 TEXT_DIM = QColor(150, 150, 150)
-DOT = QColor(240, 240, 240)
-OUTLINE = QColor(20, 20, 20, 200)
+DOT = QColor(128, 128, 128)
+OUTLINE = QColor(0, 0, 0, 70)
 RED = QColor(229, 72, 77)
 
 
@@ -20,17 +20,9 @@ def css(c: QColor) -> str:
     return f"rgba({c.red()},{c.green()},{c.blue()},{c.alpha()})"
 
 
-def paint_dot(p: QPainter, centre: QPointF, radius: float, fill: QColor | None = DOT) -> None:
-    """A filled circle with a thin dark outline, so it shows on light and dark backgrounds.
-    fill=None draws just a ring."""
-    if fill is None:
-        p.setPen(QPen(OUTLINE, 4))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawEllipse(centre, radius, radius)
-        p.setPen(QPen(DOT, 2))
-        p.drawEllipse(centre, radius, radius)
-        return
-    p.setPen(QPen(OUTLINE, max(1.0, radius / 5)))
+def paint_dot(p: QPainter, centre: QPointF, radius: float, fill: QColor = DOT) -> None:
+    """A mid-grey filled circle with a faint edge, so it reads as solid on light and dark backgrounds."""
+    p.setPen(QPen(OUTLINE, 1))
     p.setBrush(fill)
     p.drawEllipse(centre, radius, radius)
 
